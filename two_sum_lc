@@ -8,5 +8,3 @@ def mm(num, tar):
                     nn.append(j)
     return nn
 
-
-print(mm([1, 2, 2, 3, 3, 4, 4], 6))
