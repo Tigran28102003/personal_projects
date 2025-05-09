@@ -18,8 +18,8 @@ from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, Stackin
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, RandomizedSearchCV
 from sklearn.metrics import mean_squared_error, mean_absolute_error, make_scorer
 from sklearn.neighbors import KNeighborsRegressor
+from sklearn.inspection import permutation_importance
 
-import statsmodels.api as sm
 from xgboost import XGBRegressor
 from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
@@ -29,11 +29,16 @@ from tensorflow.keras import Input, Model, callbacks, optimizers
 from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, Conv1D, MaxPooling1D, Flatten, concatenate
 
 from scipy.stats import randint, uniform, loguniform
+import statsmodels.api as sm
 
 from sklearn.exceptions import ConvergenceWarning
 import warnings
 warnings.filterwarnings('ignore', category=ConvergenceWarning)
 warnings.filterwarnings('ignore')
+warnings.filterwarnings(
+    "ignore",
+    message="X has feature names, but KNeighborsRegressor was fitted without feature names"
+)
 
 # ==================== Utility Functions ====================
 
@@ -193,6 +198,42 @@ class LinearForecaster(ForecastBase, BaseEstimator):
             gs
         )
         return self
+    
+    def get_feature_importance(self, top_n: int = None) -> pd.DataFrame:
+        """
+        Возвращает DataFrame с колонками:
+        - feature: имя признака
+        - coef: с учётом знака
+        - importance: абсолютное значение coef
+
+        Отсортирован по убыванию importance.
+        Если указан top_n, вернёт только первые top_n строк.
+        """
+        if self.model_ is None:
+            raise RuntimeError("Модель не обучена. Сначала вызовите fit().")
+
+        # 1) берём обученный TTR и спускаемся к базовому регрессору
+        best_ttr: TransformedTargetRegressor = self.model_.best_estimator_
+        pipe: Pipeline = best_ttr.regressor_
+        
+        reg = pipe.named_steps['reg']
+
+        # 2) коэффициенты и имена признаков
+        coefs = reg.coef_
+        features = self.feature_names_
+
+        # 3) строим DataFrame
+        df = pd.DataFrame({
+            'feature': features,
+            'coef': coefs
+        })
+        df['importance'] = df['coef'].abs()
+        df = df.sort_values('importance', ascending=False).reset_index(drop=True)
+
+        if top_n is not None:
+            return df.head(top_n)
+        
+        return df
 
     def predict(self) -> ForecastResult:
         return self.result_
@@ -225,10 +266,8 @@ class StackingForecaster(ForecastBase, BaseEstimator):
         self.cv_splits = cv_splits
         self.n_iter = n_iter
         self.seed = seed
-        self.model_: Optional[StackingForecaster] = None
-        self.result_: Optional[ForecastResult] = None
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> 'StackingForecaster':
+    def fit(self, X: pd.DataFrame, y: pd.Series):
         """
         
         """
@@ -236,11 +275,13 @@ class StackingForecaster(ForecastBase, BaseEstimator):
         if len(X) <= self.test_size:
             raise ValueError(f"Недостаточно данных ({len(X)}) для test_size={self.test_size}")
 
-        self.log(f"Начало {self.model_type} стек")
+        self.log(f"{self.model_type} начала обучаться")
 
 
         X_train, X_test = X.iloc[:-self.test_size], X.iloc[-self.test_size:]
         y_train, y_test = y.iloc[:-self.test_size], y.iloc[-self.test_size:]
+
+        self.X_train , self.X_test = X_train, X_test
 
         preprocessor = ColumnTransformer(
             transformers=[
@@ -276,7 +317,7 @@ class StackingForecaster(ForecastBase, BaseEstimator):
 
         stack = StackingRegressor(
             estimators       = base_estimators[self.model_type],
-            final_estimator  = ElasticNet(random_state=42),
+            final_estimator  = Ridge(random_state=42),
             cv               = self.cv_splits,
             passthrough      = True,
             n_jobs           = -1
@@ -289,6 +330,8 @@ class StackingForecaster(ForecastBase, BaseEstimator):
         ])
 
         # ─── 4. TransformedTargetRegressor оборачивает ВЕСЬ пайплайн ───────────────────
+        
+        
         model = TransformedTargetRegressor(
             regressor   = stack_pipe,
             transformer = RobustScaler()
@@ -310,7 +353,7 @@ class StackingForecaster(ForecastBase, BaseEstimator):
 
                 # ElasticNet (мета‑модель)
                 'regressor__stack__final_estimator__alpha':    loguniform(1e-3, 10),
-                'regressor__stack__final_estimator__l1_ratio': uniform(0.1, 0.9),
+                # 'regressor__stack__final_estimator__l1_ratio': uniform(0.1, 0.9),
             },
             'CatBoost': { 
                 # CatBoostRegressor
@@ -327,7 +370,7 @@ class StackingForecaster(ForecastBase, BaseEstimator):
                 
                 # ElasticNet (meta-регрессор)
                 'regressor__stack__final_estimator__alpha': uniform(1e-4, 1.0),               # [1e-4, 1.0001)
-                'regressor__stack__final_estimator__l1_ratio': uniform(0.0, 1.0),             # [0, 1]
+                # 'regressor__stack__final_estimator__l1_ratio': uniform(0.0, 1.0),             # [0, 1]
             },
             'XGBoost': {
                 # XGBRegressor
@@ -346,7 +389,7 @@ class StackingForecaster(ForecastBase, BaseEstimator):
                 
                 # ElasticNet
                 'regressor__stack__final_estimator__alpha': uniform(1e-4, 1.0),
-                'regressor__stack__final_estimator__l1_ratio': uniform(0.0, 1.0),
+                # 'regressor__stack__final_estimator__l1_ratio': uniform(0.0, 1.0),
             },
             'LightGBM': {
                 # LGBMRegressor
@@ -366,7 +409,7 @@ class StackingForecaster(ForecastBase, BaseEstimator):
                 
                 # ElasticNet
                 'regressor__stack__final_estimator__alpha': uniform(1e-4, 1.0),
-                'regressor__stack__final_estimator__l1_ratio': uniform(0.0, 1.0),
+                # 'regressor__stack__final_estimator__l1_ratio': uniform(0.0, 1.0),
             }
         }
         
@@ -382,32 +425,128 @@ class StackingForecaster(ForecastBase, BaseEstimator):
 
         rs_stack.fit(X_train, y_train)
         self.model_ = rs_stack
-        self.log(f"Finished {self.model_type} training")
+
+        self.log(f"{self.model_type} закончила обучаться")
 
         # --- предсказания и метрики (возвращаются в исходном масштабе) ---
-        y_pred_train = rs_stack.predict(X_train)
-        y_pred_test = rs_stack.predict(X_test)
+        self.y_pred_train = rs_stack.predict(X_train)
+        self.y_pred_test = rs_stack.predict(X_test)
+
         metrics = {
             'train': compute_metrics(
                         y_train=y_train.values,
                         y_true=y_train.values,
-                        y_pred=y_pred_train
+                        y_pred=self.y_pred_train
                     ),
             'test': compute_metrics(
                         y_train=y_train.values,
                         y_true=y_test.values,
-                        y_pred=y_pred_test
+                        y_pred=self.y_pred_test
                     )
         }
         self.result_ = ForecastResult(
             metrics,
-            pd.Series(y_pred_test, index=X_test.index),
+            pd.Series(self.y_pred_test, index=X_test.index),
             rs_stack
         )
         return self
 
+
+    def feature_importance(self, make_plot: bool = False, fig_size: tuple=(18, 9)):
+        """
+        
+        """
+        feature_names = self.X_train.columns.tolist()
+        stack = self.model_.model_.best_estimator_.regressor_.named_steps['stack']
+
+        final_model_coefs = stack.final_estimator_.coef_
+
+        # результирующая модель - Ridge
+        fin_model_features = pd.DataFrame({
+            'feature_name': [self.model_type, 'KNN'] + feature_names, 
+            'feature_importance': final_model_coefs
+        }).sort_values(
+            by='feature_importance', ascending=False, ignore_index=True
+        )
+
+        # первая базовая модель - древовидная (RF, Boosting-like model)
+        first_base_coefs = stack.estimators_[0].feature_importances_    # либо stack.named_estimators_['xgb']
+
+        # оборачиваем результаты в датафрейм для большей читаемости 
+        first_base_importance = pd.DataFrame({
+            'feature_name': feature_names,
+            'feature_importance': first_base_coefs
+        }).sort_values(
+            by='feature_importance', 
+            ascending=False
+        )
+
+        # вторая базовая модель - KNN
+        X_val, y_val = (
+            self.X_train.iloc[-self.test_size:], 
+            self.y_train.iloc[-self.test_size:]
+        )
+
+        knn_base = stack.estimators_[1]    # либо stack.named_estimators_['knn']
+        perm = permutation_importance(
+            knn_base, X_val, y_val,    # X_val, y_val — валидационная выборка
+            n_repeats=self.n_iter, random_state=self.seed, n_jobs=-1
+        )
+        second_base_importance = pd.DataFrame({
+            'feature_name': feature_names, 
+            'permutation_importance': perm.importances_mean
+        }).sort_values(
+            by='permutation_importance', 
+            ignore_index=True,
+            ascending=False)
+
+
+        if make_plot:
+
+            # финальная модель
+            fin_model_features.plot(
+                kind='bar', x='feature_name', y='feature_importance', figsize=fig_size
+            )
+            plt.title('Ridge feature importance')
+            plt.xlabel('param name')
+            plt.ylabel('feature importance')
+
+            plt.grid(True, which='major', axis='y')
+            plt.show();
+
+            # первая модель
+            first_base_importance.plot(
+                kind='bar', x='feature_name', y='feature_importance', figsize=fig_size
+            )
+            plt.title(f'{self.model_type} feature importance', fontsize=20)
+            plt.xlabel('param name')
+            plt.ylabel('feature importance')
+
+            plt.grid(True, which='major', axis='y');
+            plt.show();
+
+            # вторая модель
+            second_base_importance.plot(
+                kind='bar', x='feature_name', y='permutation_importance', figsize=fig_size
+            )
+            plt.title('KNN feature importance', fontsize=20)
+            plt.xlabel('param name')
+            plt.ylabel('permutation importance')
+
+            plt.grid(True, which='major', axis='y');
+            plt.show();
+
+
     def predict(self) -> ForecastResult:
-        return self.result_
+        """
+        
+        """
+        preds = {
+            'train':    self.y_pred_train, 
+            'test':     self.y_pred_test
+        }
+        
+        return preds
     
 # ==================== Crypto HyperModel ====================
 # class CryptoHyperModel(kt.HyperModel):

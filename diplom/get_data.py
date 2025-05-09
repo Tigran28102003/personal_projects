@@ -41,13 +41,13 @@ class DataMaker:
             "USDT-USD": "Tether",
 
             # Металлы и сырье
-            "GC=F": "Gold",
-            "SI=F": "Silver",
-            "PL=F": "Platinum",
-            "HG=F": "Copper",
-            "CL=F": "WTI",
-            "BZ=F": "Brent_Oil",
-            "NG=F": "Natural_Gas",
+            "GC=F": "Gold_Future",
+            "SI=F": "Silver_Future",
+            "PL=F": "Platinum_Future",
+            "HG=F": "Copper_Future",
+            "CL=F": "WTI_Future",
+            "BZ=F": "Brent_Oil_Future",
+            "NG=F": "Natural_Gas_Future",
 
             # Индексы и ETF
             "^GSPC": "S&P_500",
@@ -65,7 +65,7 @@ class DataMaker:
             "XLK": "SPDR_Tech",
             "XLI": "SPDR_Industrials",
             "XLV": "SPDR_HealthCare",
-            # "XLC": "SPDR_Communications",
+            "XLC": "SPDR_Communications",
             "XLB": "SPDR_Materials",
             "XLRE": "SPDR_RealEstate",
 
@@ -108,7 +108,6 @@ class DataMaker:
             "Real_Interest_Rate": "DFII10",
             "Fed_Funds_Rate": "FEDFUNDS",
             "Reverse_Repo_Volume": "RRPONTSYD",
-            "Brent": "DCOILBRENTEU",
             "Debt": "GFDEBTN",
             "Real_GDP": "GDPC1"
         }
@@ -149,7 +148,6 @@ class DataMaker:
                     start=start_map.get(interval, self.start_date), 
                     end=end_map.get(interval, self.end_date), 
                     interval=interval,
-                    ignore_tz=True
                 )
         data.columns = [f"{self.yahoo_series[t]}_{c}" for c, t in data.columns]
 
@@ -242,14 +240,12 @@ class DataMaker:
 
         df = self.get_yahoo_data('5m')
 
-        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         not_target_cols = df.columns[~df.columns.isin(['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume'])]
-
         df = pd.concat([
             df[['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume']], 
             df[not_target_cols].shift(1)
         ], axis=1).iloc[1:]
-
+        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         df = self._get_right_price(df)
 
         df['minute'] =  df.index.minute.astype(int)
@@ -258,10 +254,10 @@ class DataMaker:
         lags_list = [1, 2, 5, 10]
 
         for lag in lags_list:
-            df[f'BTC_lag{lag}'] = df['BTC'].shift(lag+1)
+            df[f'BTC_lag{lag}'] = df['BTC'].shift(lag)
 
-        df['BTC_mean5'] = df['BTC'].shift(1).rolling(window=5).mean()
-        df['BTC_std10'] = df['BTC'].shift(1).rolling(window=10).std()
+        df['BTC_mean5'] = df['BTC'].rolling(window=5).mean()
+        df['BTC_std10'] = df['BTC'].rolling(window=10).std()
 
         df = df[~df.AMD.isna()]
 
@@ -276,15 +272,12 @@ class DataMaker:
         self.log('Часовые данные начали грузиться\n')
 
         df = self.get_yahoo_data('60m')
-
-        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         not_target_cols = df.columns[~df.columns.isin(['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume'])]
- 
         df = pd.concat([
             df[['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume']], 
             df[not_target_cols].shift(1)
         ], axis=1).iloc[1:]
- 
+        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         df = self._get_right_price(df)
 
         df['day'] = df.index.day.astype(int)
@@ -293,10 +286,10 @@ class DataMaker:
         lags_list = [1, 2, 5, 10]
 
         for lag in lags_list:
-            df[f'BTC_lag{lag}'] = df['BTC'].shift(lag+1)
+            df[f'BTC_lag{lag}'] = df['BTC'].shift(lag)
 
-        df['BTC_mean5'] = df['BTC'].shift(1).rolling(window=5).mean()
-        df['BTC_std10'] = df['BTC'].shift(1).rolling(window=10).std()
+        df['BTC_mean5'] = df['BTC'].rolling(window=5).mean()
+        df['BTC_std10'] = df['BTC'].rolling(window=10).std()
 
 
         df = df[~df.MACD.isna()]
@@ -313,13 +306,12 @@ class DataMaker:
         
         df = self.get_yahoo_data('1d')
 
-        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         not_target_cols = df.columns[~df.columns.isin(['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume'])]
-
         df = pd.concat([
             df[['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume']], 
             df[not_target_cols].shift(1)
         ], axis=1).iloc[1:]
+        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         df = self._get_right_price(df)
 
         df = (
@@ -342,16 +334,17 @@ class DataMaker:
 
         df['day'] = df.index.day.astype(int)
         df['month'] = df.index.month.astype(int)
+        df['year'] = df.index.year.astype(int)
         df['day_of_week'] = df.index.dayofweek.astype(int)
         df['is_holiday'] = [1 if date in holidays.US() else 0 for date in df.index]
 
         lags_list = [1, 2, 5, 10]
 
         for lag in lags_list:
-            df[f'BTC_lag{lag}'] = df['BTC'].shift(lag+1)
+            df[f'BTC_lag{lag}'] = df['BTC'].shift(lag)
 
-        df['BTC_mean5'] = df['BTC'].shift(1).rolling(window=5).mean()
-        df['BTC_std10'] = df['BTC'].shift(1).rolling(window=10).std()
+        df['BTC_mean5'] = df['BTC'].rolling(window=5).mean()
+        df['BTC_std10'] = df['BTC'].rolling(window=10).std()
 
         df = df[~df.Feer_Greed_value.isna()]
 
@@ -366,12 +359,13 @@ class DataMaker:
         self.log('Недельные данные начали грузиться\n')
 
         df = self.get_yahoo_data('1wk')
+ 
         not_target_cols = df.columns[~df.columns.isin(['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume'])]
-
         df = pd.concat([
             df[['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume']], 
             df[not_target_cols].shift(1)
         ], axis=1).iloc[1:]
+        df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         df = self._get_right_price(df)
 
         fred_w = self.download_fred_data().resample('W-MON').ffill()
