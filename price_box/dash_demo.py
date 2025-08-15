@@ -23,7 +23,7 @@ for i in range(50):
 
 # ------------------- Основные параметры и генерация -------------------
 
-n_days = 365
+n_days = 30
 start_date = pd.to_datetime("2024-01-01")
 np.random.seed(42)
 random.seed(42)
@@ -64,7 +64,24 @@ start_filter, end_filter = st.date_input(
     max_value=start_date + pd.Timedelta(days=n_days-1)
 )
 
-filt_df = df[(df["Дата_dt"] >= pd.to_datetime(start_filter)) & (df["Дата_dt"]  0 else 0
+filt_df = df[(df["Дата_dt"] >= pd.to_datetime(start_filter)) & (df["Дата_dt"] <= pd.to_datetime(end_filter))]
+
+agg = filt_df.groupby("Дата").agg({
+    "Продажи": "sum",
+    "Выручка": "sum",
+    "Прибыль": "sum",
+    "Возвраты": "sum",
+    "Средний чек": "mean",
+    "Средний рейтинг": "mean",
+    "Расходы на маркетинг": "sum",
+    "Конверсия": "mean"
+}).reset_index()
+
+items_sold = int(agg["Продажи"].sum())
+total_revenue = agg["Выручка"].sum()
+total_profit = agg["Прибыль"].sum()
+total_returns = agg["Возвраты"].sum()
+return_rate = (total_returns / items_sold * 100) if items_sold > 0 else 0
 avg_check = agg["Средний чек"].mean()
 avg_rating = agg["Средний рейтинг"].mean()
 avg_conv = agg["Конверсия"].mean() * 100
