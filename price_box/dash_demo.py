@@ -111,13 +111,13 @@ def plot_revenue_profit_sales(df):
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45))
     )
 
-    # Ось Y слева для выручки (с заголовком)
+    # Ось Y слева (с заголовком) для выручки и прибыли
     line_revenue = base.mark_line(color=color_revenue).encode(
         y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка и Прибыль, ₽', titleColor=color_revenue))
     )
-    # Линия прибыли рисуется на той же оси Y без повторного заголовка
+    # Линия прибыли на той же оси, без отрисовки оси (axis=None)
     line_profit = base.mark_line(color=color_profit).encode(
-        y='Прибыль:Q'
+        y=alt.Y('Прибыль:Q', axis=None)
     )
 
     # Отдельная ось Y справа для продаж
