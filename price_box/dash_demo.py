@@ -184,8 +184,8 @@ base = alt.Chart(top_cats).encode(
     x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории', titleColor='#003366'))
 )
 
-bar_revenue = base.mark_bar(color='#aec6cf', opacity=0.5).encode(
-    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#aec6cf'))
+bar_revenue = base.mark_bar(color='#00aaff', opacity=0.5).encode(
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#00aaff'))
 )
 
 line_sales = base.mark_line(color='#003366', size=3).encode(
