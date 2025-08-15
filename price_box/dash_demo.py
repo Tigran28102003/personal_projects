@@ -195,31 +195,53 @@ st.bar_chart(top_cats[["Выручка", "Продажи"]])
 
 # ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
-top5_goods = (
-    filt_df.groupby("Товар")
+top_cats = (
+    filt_df.groupby("Категория")
     .agg({"Продажи": "sum", "Выручка": "sum"})
-    .sort_values("Продажи", ascending=False)
+    .sort_values("Выручка", ascending=False)
     .head(5)
-)
-st.table(top5_goods.reset_index())
+).reset_index()
 
-# Средний рейтинг и средний чек с двумя осями Y и синими оттенками
-st.subheader("Средний рейтинг и средний чек")
-st.altair_chart(
-    alt.layer(
-        alt.Chart(agg).mark_line(color=color_profit).encode(
-            x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
-            y=alt.Y('Средний рейтинг:Q', axis=alt.Axis(title='Средний рейтинг', titleColor=color_profit))
-        ),
-        alt.Chart(agg).mark_line(color=color_sales).encode(
-            x='Дата:T',
-            y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
-        )
-    ).resolve_scale(
-        y='independent'
-    ).properties(width=700, height=350),
-    use_container_width=True
+# Создаем Altair диаграмму с двумя осями Y и прозрачностью
+base = alt.Chart(top_cats).encode(
+    y=alt.Y('Категория:N', sort='-x')
 )
+
+bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
+    x=alt.X('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', grid=False))
+)
+
+bar_sales = base.mark_bar(color='darkblue', opacity=0.5).encode(
+    x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2])),
+    tooltip=['Категория', 'Продажи']
+).interactive()
+
+# Отдельная ось X для "Продаж":
+bar_sales = bar_sales.encode(
+    x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2]))
+).properties(width=400)
+
+# Слой для выручки с осью X слева
+bars_left = bar_revenue.properties(width=400)
+
+# Слой для продаж с осью X справа
+bars_right = bar_sales.encode(
+    x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False)),
+    y=alt.Y('Категория:N', sort='-x', axis=None)
+)
+
+# Создаем композицию с разделением осей X слева и справа
+chart = alt.hconcat(
+    bars_left,
+    bars_right
+).resolve_scale(
+    y='shared'
+).configure_axis(
+    labelFontSize=12,
+    titleFontSize=14
+)
+
+st.altair_chart(chart, use_container_width=True)
 
 # Отображение данных по желанию пользователя
 show_data = st.checkbox("Показать все исходные данные по товарам")
