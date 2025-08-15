@@ -115,14 +115,14 @@ def plot_revenue_profit_sales(df):
     line_revenue = base.mark_line(color=color_revenue).encode(
         y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка и Прибыль, ₽', titleColor=color_revenue))
     )
-    line_profit = base.mark_line(color=color_profit).encode(
-        y=alt.Y('Прибыль:Q')
-    )
-
-    # # Отдельная ось справа для продаж
-    # line_sales = base.mark_line(color=color_sales).encode(
-    #     y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
+    # line_profit = base.mark_line(color=color_profit).encode(
+    #     y=alt.Y('Прибыль:Q')
     # )
+
+    # Отдельная ось справа для продаж
+    line_sales = base.mark_line(color=color_sales).encode(
+        y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
+    )
 
     chart = alt.layer(line_revenue, line_profit
                     #   , line_sales
