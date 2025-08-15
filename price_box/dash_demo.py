@@ -7,23 +7,21 @@ import locale
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
-# Установить локаль на русскую
+# на всякий случай установим русскую локаль
 try:
     locale.setlocale(locale.LC_TIME, 'ru_RU.UTF-8')
 except:
     pass
 
-# Устанавливаем стартовую и конечную даты
-start_date = datetime(2024, 1, 1)  # Фиксированная дата начала
-end_date = datetime.now()  # Текущая дата как конечная
+# условные начальная и конечная дата
+start_date = datetime(2024, 1, 1)
+end_date = datetime.now()
 
-# Рассчитываем количество дней между датами
 n_days = (end_date - start_date).days + 1  # +1 чтобы включить обе граничные даты
 
 # Генерируем диапазон дат
 dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
-# В функции generate_data() заменяем статический n_days на вычисленный:
 @st.cache_data
 def generate_data():
     categories = [
@@ -45,7 +43,6 @@ def generate_data():
 
     dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
-    # Остальная часть генерации данных остается без изменений
     base_sales = np.random.poisson(lam=12, size=(n_days, 50))
     base_returns = np.random.binomial(base_sales, 0.12)
     base_revenue = base_sales * np.random.randint(4000, 60000, size=(n_days, 50))
@@ -106,7 +103,7 @@ else:
         max_value=df["Дата_dt"].max()
     )
 
-# Фильтр по категориям (мультиселект)
+# Фильтр по категориям
 selected_categories = st.sidebar.multiselect(
     "Выберите категории товаров",
     options=categories,
@@ -124,7 +121,6 @@ filt_df = df[
 # ------------------- Основные метрики -------------------
 st.title("📊 Дашборд селлера маркетплейса: техника (демо-данные)")
 
-# Агрегация данных с учетом фильтров
 agg = filt_df.groupby("Дата").agg({
     "Продажи": "sum",
     "Выручка": "sum",
@@ -137,7 +133,6 @@ agg = filt_df.groupby("Дата").agg({
     "ROI": "mean"
 }).reset_index()
 
-# Расчет ключевых показателей
 items_sold = int(agg["Продажи"].sum())
 total_revenue = agg["Выручка"].sum()
 total_profit = agg["Прибыль"].sum()
@@ -149,7 +144,6 @@ avg_conv = agg["Конверсия"].mean() * 100
 total_marketing = agg["Расходы на маркетинг"].sum()
 avg_roi = agg["ROI"].mean()
 
-# Отображение метрик в колонках с иконками и delta-значениями
 with st.container():
     cols = st.columns(4)
     cols[0].metric("💰 Выручка", f"{total_revenue:,.0f} ₽",
@@ -174,7 +168,7 @@ with st.container():
     cols[3].metric("📊 ROI маркетинга", f"{avg_roi:.1f}x",
                   help="Окупаемость маркетинговых инвестиций")
 
-# ------------------- Улучшенные визуализации -------------------
+# ------------------- Визуализации -------------------
 
 # 1. График выручки, прибыли и продаж (все линейные)
 st.subheader("📈 Динамика ключевых показателей")
@@ -187,14 +181,12 @@ def plot_enhanced_revenue_profit_sales(df):
         title='Динамика ключевых показателей'
     )
 
-    # Цветовая схема (оттенки синего)
     colors = {
         'revenue': '#003366',  # Темно-синий (выручка)
         'profit': '#4a90e2',   # Ярко-синий (прибыль)
         'sales': '#88c1f4'     # Светло-голубой (продажи)
     }
 
-    # График выручки (левая ось Y) - толстая темно-синяя линия
     revenue = base.mark_line(
         color=colors['revenue'],
         strokeWidth=3,
@@ -206,7 +198,6 @@ def plot_enhanced_revenue_profit_sales(df):
         tooltip=['Дата:T', alt.Tooltip('Выручка:Q', format=',.0f', title='Выручка, ₽')]
     )
 
-    # График прибыли (левая ось Y) - ярко-синяя линия средней толщины
     profit = base.mark_line(
         color=colors['profit'],
         strokeWidth=2.5,
@@ -217,7 +208,6 @@ def plot_enhanced_revenue_profit_sales(df):
         tooltip=['Дата:T', alt.Tooltip('Прибыль:Q', format=',.0f', title='Прибыль, ₽')]
     )
 
-    # График продаж (правая ось Y) - светло-голубая пунктирная линия
     sales = base.mark_line(
         color=colors['sales'],
         strokeWidth=2,
@@ -230,7 +220,6 @@ def plot_enhanced_revenue_profit_sales(df):
         tooltip=['Дата:T', alt.Tooltip('Продажи:Q', format=',d', title='Продажи, шт')]
     )
 
-    # Объединяем графики
     chart = alt.layer(
         revenue + profit,  # Выручка и прибыль на левой оси
         sales              # Продажи на правой оси
@@ -262,18 +251,15 @@ def plot_enhanced_revenue_profit_sales(df):
 st.altair_chart(plot_enhanced_revenue_profit_sales(agg), use_container_width=True)
 
 
-# 2. Улучшенный график возвратов с областью и средней линией
-# Улучшенный график возвратов с правильными осями
+# 2. Анализ возвратов
 st.subheader("🔄 Анализ возвратов")
 agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
 
-# Цветовая схема
 colors = {
     'returns': '#003366',   # Тёмно-синий для количества возвратов
     'rate': '#4a90e2'      # Ярко-синий для доли возвратов
 }
 
-# График количества возвратов (левая ось Y)
 returns_line = alt.Chart(agg).mark_line(
     color=colors['returns'],
     strokeWidth=2.5,
@@ -288,7 +274,6 @@ returns_line = alt.Chart(agg).mark_line(
             alt.Tooltip('Доля возвратов, %:Q', format='.1f', title='Доля возвратов, %')]
 )
 
-# График доли возвратов (правая ось Y) - теперь сплошная линия
 return_rate_line = alt.Chart(agg).mark_line(
     color=colors['rate'],
     strokeWidth=2.5,
@@ -337,13 +322,11 @@ st.subheader("📢 Эффективность маркетинга")
 tab1, tab2 = st.tabs(["Расходы и конверсия", "ROI"])
 
 with tab1:
-    # Цветовая схема
     colors = {
         'marketing': '#1f77b4',  # Синий для расходов на маркетинг
         'conversion': '#4a90e2'  # Голубой для конверсии
     }
 
-    # График расходов на маркетинг (левая ось Y)
     marketing_line = alt.Chart(agg).mark_line(
         color=colors['marketing'],
         strokeWidth=3,
@@ -356,7 +339,6 @@ with tab1:
         tooltip=['Дата:T', alt.Tooltip('Расходы на маркетинг:Q', format=',.0f', title='Маркетинг, ₽')]
     )
 
-    # График конверсии (правая ось Y) - сплошная линия
     conversion_line = alt.Chart(agg).mark_line(
         color=colors['conversion'],
         strokeWidth=3,
@@ -369,7 +351,6 @@ with tab1:
         tooltip=[alt.Tooltip('Конверсия:Q', format='.1f', title='Конверсия, %')]
     )
 
-    # Объединяем графики
     chart = (marketing_line + conversion_line).resolve_scale(
         y='independent'
     ).properties(
@@ -425,7 +406,6 @@ with abc_tab1:
         .reset_index()
     )
 
-    # Добавляем кумулятивную долю для ABC-анализа
     top_goods_revenue['Доля'] = top_goods_revenue['Выручка'] / top_goods_revenue['Выручка'].sum()
     top_goods_revenue['Кумулятивная доля'] = top_goods_revenue['Доля'].cumsum()
 
@@ -461,14 +441,9 @@ with abc_tab2:
 
 # 5. Анализ по дням недели
 st.subheader("📅 Анализ по дням недели")
-# Преобразуем столбец 'Дата' в datetime, если это еще не сделано
+
 agg['Дата'] = pd.to_datetime(agg['Дата'])
-
-# Теперь можно извлечь день недели
 agg['День недели'] = agg['Дата'].dt.day_name()
-
-# # Для русской локализации можно использовать (если локаль установлена правильно):
-# agg['День недели'] = agg['Дата'].dt.strftime('%A')
 
 weekday_analysis = agg.groupby('День недели').agg({
     'Выручка': 'mean',
@@ -476,7 +451,6 @@ weekday_analysis = agg.groupby('День недели').agg({
     'Конверсия': 'mean'
 }).reset_index()
 
-# Упорядочиваем дни недели
 weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 weekday_analysis['День недели'] = pd.Categorical(
     weekday_analysis['День недели'],
@@ -496,7 +470,9 @@ weekday_chart = alt.Chart(weekday_analysis).mark_bar().encode(
 
 st.altair_chart(weekday_chart, use_container_width=True)
 
-# ------------------- Дополнительные функции -------------------
+
+# развертывание данные и их скачивание при необходимости
+
 expander = st.expander("🔍 Детализированные данные")
 with expander:
     st.write("### Полные данные за выбранный период")
@@ -506,7 +482,6 @@ with expander:
         use_container_width=True
     )
 
-    # Кнопка для скачивания данных
     csv = filt_df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📥 Скачать данные в CSV",
