@@ -183,8 +183,58 @@ st.altair_chart(
     use_container_width=True
 )
 
-# ТОП-5 категорий по выручке и продажам
-st.subheader("ТОП-5 категорий по выручке и продажам")
+# # ТОП-5 категорий по выручке и продажам
+# st.subheader("ТОП-5 категорий по выручке и продажам")
+# top_cats = (
+#     filt_df.groupby("Категория")
+#     .agg({"Продажи": "sum", "Выручка": "sum"})
+#     .sort_values("Выручка", ascending=False)
+#     .head(5)
+# ).reset_index()
+
+# # Создаем Altair диаграмму с двумя осями Y и прозрачностью
+# base = alt.Chart(top_cats).encode(
+#     y=alt.Y('Категория:N', sort='-x')
+# )
+
+# bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
+#     x=alt.X('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', grid=False))
+# )
+
+# bar_sales = base.mark_bar(color='darkblue', opacity=0.5).encode(
+#     x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2])),
+#     tooltip=['Категория', 'Продажи']
+# ).interactive()
+
+# # Отдельная ось X для "Продаж":
+# bar_sales = bar_sales.encode(
+#     x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2]))
+# ).properties(width=400)
+
+# # Слой для выручки с осью X слева
+# bars_left = bar_revenue.properties(width=400)
+
+# # Слой для продаж с осью X справа
+# bars_right = bar_sales.encode(
+#     x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False)),
+#     y=alt.Y('Категория:N', sort='-x', axis=None)
+# )
+
+# # Создаем композицию с разделением осей X слева и справа
+# chart = alt.hconcat(
+#     bars_left,
+#     bars_right
+# ).resolve_scale(
+#     y='shared'
+# ).configure_axis(
+#     labelFontSize=12,
+#     titleFontSize=14
+# )
+
+# st.altair_chart(chart, use_container_width=True)
+
+st.subheader("ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)")
+
 top_cats = (
     filt_df.groupby("Категория")
     .agg({"Продажи": "sum", "Выручка": "sum"})
@@ -192,44 +242,56 @@ top_cats = (
     .head(5)
 ).reset_index()
 
-# Создаем Altair диаграмму с двумя осями Y и прозрачностью
 base = alt.Chart(top_cats).encode(
-    y=alt.Y('Категория:N', sort='-x')
+    x=alt.X('Категория:N', sort='-y')
 )
 
-bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
-    x=alt.X('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', grid=False))
+bar_revenue = base.mark_bar(color='blue', opacity=0.5, width=30).encode(
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽'))
 )
 
-bar_sales = base.mark_bar(color='darkblue', opacity=0.5).encode(
-    x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2])),
-    tooltip=['Категория', 'Продажи']
-).interactive()
+bar_sales = base.mark_bar(color='darkblue', opacity=0.5, width=20).encode(
+    y=alt.Y('Продажи:Q', axis=None)  # отключаем ось, чтобы не путать
+)
 
-# Отдельная ось X для "Продаж":
+# Сдвигаем бары продаж немного вправо для перекрытия
 bar_sales = bar_sales.encode(
-    x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2]))
+    x=alt.X('Категория:N', sort='-y', axis=None),
+).transform_calculate(
+    x_offset="0.15"
 ).properties(width=400)
 
-# Слой для выручки с осью X слева
-bars_left = bar_revenue.properties(width=400)
+# Чтобы сдвинуть бары продаж, воспользуемся дополнительным трансформом сдвига координат:
+# В Altair можно использовать параметр xOffset, но его нет в базовых mark_bar,
+# поэтому применим совместное добавление сдвига через 'x' в данных:
 
-# Слой для продаж с осью X справа
-bars_right = bar_sales.encode(
-    x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False)),
-    y=alt.Y('Категория:N', sort='-x', axis=None)
+bar_sales = base.mark_bar(color='darkblue', opacity=0.5, width=20).encode(
+    x=alt.X('Категория:N', sort='-y'),
+    y='Продажи:Q'
+).transform_calculate(
+    x_offset="0.15"
+).encode(
+    x=alt.X('Категория:N', sort='-y', axis=None),
+).properties(width=400)
+
+# Альтернативный способ: сместить бары продаж вручную через условие position within x
+
+# Легче сделать перекрытие через layered chart и сдвиг через xOffset (Altair >= 4.2):
+bar_revenue = base.mark_bar(color='blue', opacity=0.5, size=30).encode(
+    x=alt.X('Категория:N', axis=alt.Axis(title='Категории')),
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽'))
 )
 
-# Создаем композицию с разделением осей X слева и справа
-chart = alt.hconcat(
-    bars_left,
-    bars_right
-).resolve_scale(
-    y='shared'
-).configure_axis(
-    labelFontSize=12,
-    titleFontSize=14
+bar_sales = base.mark_bar(color='darkblue', opacity=0.5, size=20).encode(
+    x=alt.X('Категория:N'),
+    y=alt.Y('Продажи:Q', axis=None),
+).encode(
+    xOffset=20
 )
+
+chart = alt.layer(bar_revenue, bar_sales).resolve_scale(
+    y='independent'
+).properties(width=500, height=400)
 
 st.altair_chart(chart, use_container_width=True)
 
