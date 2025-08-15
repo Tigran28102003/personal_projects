@@ -189,7 +189,7 @@ bar_revenue = base.mark_bar(color='#00aaff', opacity=0.5).encode(
 )
 
 line_sales = base.mark_line(color='#003366', size=3).encode(
-    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.'))
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366'))
 )
 
 chart = alt.layer(bar_revenue, line_sales).resolve_scale(
