@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -174,4 +173,3 @@ st.altair_chart(
 show_data = st.checkbox("Показать все исходные данные по товарам")
 if show_data:
     st.dataframe(filt_df.drop(columns=["Дата_dt"]).reset_index(drop=True))
-```
