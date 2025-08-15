@@ -29,8 +29,8 @@ def generate_data():
         product_cats.append(category)
 
     n_days = 365
-    end_date = datetime.datetime.now()  # Текущая дата
-    start_date = end_date - datetime.timedelta(days=n_days-1)  # 365 дней назад
+    end_date = datetime.now()  # Текущая дата
+    start_date = end_date - timedelta(days=n_days-1)  # 365 дней назад
 
     dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
