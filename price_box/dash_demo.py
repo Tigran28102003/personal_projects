@@ -173,6 +173,14 @@ st.altair_chart(
 # ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)
 st.subheader("ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)")
 
+
+top_cats = (
+    filt_df.groupby("Категория")
+    .agg({"Продажи": "sum", "Выручка": "sum"})
+    .sort_values("Выручка", ascending=False)
+    .head(5)
+).reset_index()
+
 top_cats_long = pd.melt(
     top_cats,
     id_vars=['Категория'],
