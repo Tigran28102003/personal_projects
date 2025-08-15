@@ -187,28 +187,24 @@ top_cats = (
     .head(5)
 ).reset_index()
 
-base = alt.Chart(top_cats).encode(
-    x=alt.X('Категория:N', axis=alt.Axis(title='Категории'), sort=top_cats['Категория'].tolist())
-)
-
-bar_revenue = base.mark_bar(color='#00aaff', opacity=0.7).encode(
+chart_revenue = alt.Chart(top_cats).mark_bar(color='#00aaff', opacity=0.7).encode(
+    x=alt.X('Категория:N', axis=alt.Axis(title='Категории')),
     y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#00aaff'))
-)
+).properties(width=300, height=400)
 
-bar_sales = base.mark_bar(color='#003366', opacity=0.7).encode(
-    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366')),
-    x=alt.X('Категория:N', axis=alt.Axis(labels=False), sort=top_cats['Категория'].tolist()),
-    xOffset=20  # сдвигаем вправо столбцы продаж
-)
+chart_sales = alt.Chart(top_cats).mark_bar(color='#003366', opacity=0.7).encode(
+    x=alt.X('Категория:N', axis=alt.Axis(labels=False)),
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366'))
+).properties(width=300, height=400)
 
-chart = alt.layer(bar_revenue, bar_sales).resolve_scale(
+combined_chart = alt.hconcat(chart_revenue, chart_sales).resolve_scale(
     y='independent'
-).properties(
-    width=600,
-    height=400
 ).interactive()
 
-st.altair_chart(chart, use_container_width=True)
+st.altair_chart(combined_chart, use_container_width=True)
+
+
+
 # ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
 top5_goods = (
