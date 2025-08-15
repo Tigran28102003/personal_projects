@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import altair as alt
 import random
-
 import locale
 
 # Установить локаль на русскую (если система это поддерживает)
@@ -23,7 +22,7 @@ product_names = []
 product_cats = []
 for i in range(50):
     category = random.choice(categories)
-    prod_name = f"{category} {chr(65 + i%10)}-{1000 + i}"
+    prod_name = f"{category} {chr(65 + i % 10)}-{1000 + i}"
     product_names.append(prod_name)
     product_cats.append(category)
 
@@ -38,7 +37,7 @@ dates = pd.date_range(start=start_date, periods=n_days, freq='D')
 
 base_sales = np.random.poisson(lam=12, size=(n_days, 50))
 base_returns = np.random.binomial(base_sales, 0.12)
-base_revenue = base_sales * np.random.randint(4_000, 60_000, size=(n_days, 50))
+base_revenue = base_sales * np.random.randint(4000, 60000, size=(n_days, 50))
 base_rating = np.random.beta(a=7, b=2, size=(n_days, 50)) * 4 + 1
 base_marketing = np.random.gamma(shape=2, scale=400, size=(n_days, 50))
 base_conversion = np.random.beta(a=2.5, b=12, size=(n_days, 50))
@@ -65,9 +64,9 @@ df["Дата_dt"] = pd.to_datetime(df["Дата"])
 
 start_filter, end_filter = st.date_input(
     "Выберите временной период для анализа",
-    value=[start_date, start_date + pd.Timedelta(days=n_days-1)],
+    value=[start_date, start_date + pd.Timedelta(days=n_days - 1)],
     min_value=start_date,
-    max_value=start_date + pd.Timedelta(days=n_days-1)
+    max_value=start_date + pd.Timedelta(days=n_days - 1)
 )
 
 filt_df = df[(df["Дата_dt"] >= pd.to_datetime(start_filter)) & (df["Дата_dt"] <= pd.to_datetime(end_filter))]
@@ -108,27 +107,22 @@ with st.container():
     col6.metric("Средний рейтинг", f"{avg_rating:.2f}")
     col7.metric("Конверсия, %", f"{avg_conv:.2f}")
     col8.metric("Расходы на рекламу, ₽", f"{total_marketing:,.0f}")
-# Оттенки синего для линий
-color_revenue = "#1f77b4"  # оттенок синего для выручки
-color_profit = "#4a90e2"   # светлее синий для прибыли
-color_sales = "#003366"    # тёмно-синий для продаж
 
+color_revenue = "#1f77b4"   # оттенок синего для выручки
+color_profit = "#4a90e2"    # светлее синий для прибыли
+color_sales = "#003366"     # тёмно-синий для продаж
 
 def plot_revenue_profit_sales(df):
     base = alt.Chart(df).encode(
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45))
     )
 
-    # Ось Y слева (с заголовком) для выручки и прибыли
     line_revenue = base.mark_line(color=color_revenue).encode(
         y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка и Прибыль, ₽', titleColor=color_revenue))
     )
-    # Линия прибыли на той же оси, без отрисовки оси (axis=None)
     line_profit = base.mark_line(color=color_profit).encode(
         y=alt.Y('Прибыль:Q', axis=None)
     )
-
-    # Отдельная ось Y справа для продаж
     line_sales = base.mark_line(color=color_sales).encode(
         y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
     )
@@ -138,15 +132,9 @@ def plot_revenue_profit_sales(df):
     ).properties(width=700, height=350)
     return chart
 
-# Использование:
-st.altair_chart(plot_revenue_profit_sales(agg), use_container_width=True)
-
-# Использование:
 st.subheader("Динамика выручки, прибыли и продаж")
 st.altair_chart(plot_revenue_profit_sales(agg), use_container_width=True)
 
-
-# Возвраты и доля возвратов (доля как вторичная ось)
 agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
 st.subheader("Возвраты и их доля (%)")
 st.altair_chart(
@@ -165,7 +153,6 @@ st.altair_chart(
     use_container_width=True
 )
 
-# Расходы на маркетинг и конверсия (конверсия — вторичная ось)
 st.subheader("Расходы на маркетинг и конверсия")
 st.altair_chart(
     alt.layer(
@@ -183,56 +170,7 @@ st.altair_chart(
     use_container_width=True
 )
 
-# # ТОП-5 категорий по выручке и продажам
-# st.subheader("ТОП-5 категорий по выручке и продажам")
-# top_cats = (
-#     filt_df.groupby("Категория")
-#     .agg({"Продажи": "sum", "Выручка": "sum"})
-#     .sort_values("Выручка", ascending=False)
-#     .head(5)
-# ).reset_index()
-
-# # Создаем Altair диаграмму с двумя осями Y и прозрачностью
-# base = alt.Chart(top_cats).encode(
-#     y=alt.Y('Категория:N', sort='-x')
-# )
-
-# bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
-#     x=alt.X('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', grid=False))
-# )
-
-# bar_sales = base.mark_bar(color='darkblue', opacity=0.5).encode(
-#     x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2])),
-#     tooltip=['Категория', 'Продажи']
-# ).interactive()
-
-# # Отдельная ось X для "Продаж":
-# bar_sales = bar_sales.encode(
-#     x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False), scale=alt.Scale(domain=[0, top_cats['Продажи'].max()*1.2]))
-# ).properties(width=400)
-
-# # Слой для выручки с осью X слева
-# bars_left = bar_revenue.properties(width=400)
-
-# # Слой для продаж с осью X справа
-# bars_right = bar_sales.encode(
-#     x=alt.X('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', grid=False)),
-#     y=alt.Y('Категория:N', sort='-x', axis=None)
-# )
-
-# # Создаем композицию с разделением осей X слева и справа
-# chart = alt.hconcat(
-#     bars_left,
-#     bars_right
-# ).resolve_scale(
-#     y='shared'
-# ).configure_axis(
-#     labelFontSize=12,
-#     titleFontSize=14
-# )
-
-# st.altair_chart(chart, use_container_width=True)
-
+# ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)
 st.subheader("ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)")
 
 top_cats = (
@@ -251,42 +189,8 @@ bar_revenue = base.mark_bar(color='blue', opacity=0.5, width=30).encode(
 )
 
 bar_sales = base.mark_bar(color='darkblue', opacity=0.5, width=20).encode(
-    y=alt.Y('Продажи:Q', axis=None)  # отключаем ось, чтобы не путать
-)
-
-# Сдвигаем бары продаж немного вправо для перекрытия
-bar_sales = bar_sales.encode(
-    x=alt.X('Категория:N', sort='-y', axis=None),
-).transform_calculate(
-    x_offset="0.15"
-).properties(width=400)
-
-# Чтобы сдвинуть бары продаж, воспользуемся дополнительным трансформом сдвига координат:
-# В Altair можно использовать параметр xOffset, но его нет в базовых mark_bar,
-# поэтому применим совместное добавление сдвига через 'x' в данных:
-
-bar_sales = base.mark_bar(color='darkblue', opacity=0.5, width=20).encode(
-    x=alt.X('Категория:N', sort='-y'),
-    y='Продажи:Q'
-).transform_calculate(
-    x_offset="0.15"
-).encode(
-    x=alt.X('Категория:N', sort='-y', axis=None),
-).properties(width=400)
-
-# Альтернативный способ: сместить бары продаж вручную через условие position within x
-
-# Легче сделать перекрытие через layered chart и сдвиг через xOffset (Altair >= 4.2):
-bar_revenue = base.mark_bar(color='blue', opacity=0.5, size=30).encode(
-    x=alt.X('Категория:N', axis=alt.Axis(title='Категории')),
-    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽'))
-)
-
-bar_sales = base.mark_bar(color='darkblue', opacity=0.5, size=20).encode(
-    x=alt.X('Категория:N'),
     y=alt.Y('Продажи:Q', axis=None),
-).encode(
-    xOffset=20
+    xOffset=10  # сдвиг выступающего бара вправо для перекрытия
 )
 
 chart = alt.layer(bar_revenue, bar_sales).resolve_scale(
@@ -305,7 +209,7 @@ top5_goods = (
 )
 st.table(top5_goods.reset_index())
 
-# Средний рейтинг и средний чек с двумя осями Y и синими оттенками
+# Средний рейтинг и средний чек
 st.subheader("Средний рейтинг и средний чек")
 st.altair_chart(
     alt.layer(
