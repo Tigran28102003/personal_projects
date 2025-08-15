@@ -92,7 +92,7 @@ total_returns = agg["Возвраты"].sum()
 return_rate = total_returns / items_sold * 100 if items_sold > 0 else 0
 avg_check = agg["Средний чек"].mean()
 avg_rating = agg["Средний рейтинг"].mean()
-avg_conv = agg["Конверция"].mean() * 100
+avg_conv = agg["Конверсия"].mean() * 100
 total_marketing = agg["Расходы на маркетинг"].sum()
 
 st.title("Дашборд селлера маркетплейса: техника (демо-данные)")
