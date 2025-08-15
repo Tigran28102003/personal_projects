@@ -119,32 +119,22 @@ def plot_revenue_profit_sales(df):
         y=alt.Y('Прибыль:Q')
     )
 
-    # Отдельная ось справа для продаж
-    line_sales = base.mark_line(color=color_sales).encode(
-        y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
-    )
+    # # Отдельная ось справа для продаж
+    # line_sales = base.mark_line(color=color_sales).encode(
+    #     y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
+    # )
 
-    chart = alt.layer(line_revenue, line_profit, line_sales).resolve_scale(
+    chart = alt.layer(line_revenue, line_profit
+                    #   , line_sales
+                ).resolve_scale(
         y='independent'
     ).properties(width=700, height=350)
     return chart
 
 # Использование:
+st.subheader("Динамика выручки, прибыли и продаж")
 st.altair_chart(plot_revenue_profit_sales(agg), use_container_width=True)
 
-# Построение первого графика с продажами на отдельной оси Y и оттенками синего
-st.subheader("Динамика выручки, прибыли и продаж")
-st.altair_chart(
-    plot_revenue_profit_sales(
-        agg,
-        'Дата',
-        'Выручка',
-        'Прибыль',
-        'Выручка, ₽',
-        'Прибыль, ₽'
-    ),
-    use_container_width=True
-)
 
 # Возвраты и доля возвратов (доля как вторичная ось)
 agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
