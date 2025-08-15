@@ -337,42 +337,77 @@ st.subheader("📢 Эффективность маркетинга")
 tab1, tab2 = st.tabs(["Расходы и конверсия", "ROI"])
 
 with tab1:
-    marketing_chart = alt.Chart(agg).mark_area(
-        color='#1f77b4',
-        opacity=0.5,
+    # Цветовая схема
+    colors = {
+        'marketing': '#1f77b4',  # Синий для расходов на маркетинг
+        'conversion': '#4a90e2'  # Голубой для конверсии
+    }
+
+    # График расходов на маркетинг (левая ось Y)
+    marketing_line = alt.Chart(agg).mark_line(
+        color=colors['marketing'],
+        strokeWidth=3,
         interpolate='monotone'
     ).encode(
-        x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None)),
-        y=alt.Y('Расходы на маркетинг:Q', axis=alt.Axis(title='Расходы на маркетинг, ₽', titleColor='#1f77b4')),
-        tooltip=['Дата:T', 'Расходы на маркетинг:Q']
+        x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None, grid=False)),
+        y=alt.Y('Расходы на маркетинг:Q',
+            axis=alt.Axis(title='Расходы на маркетинг, ₽', titleColor=colors['marketing']),
+            scale=alt.Scale(zero=False)),
+        tooltip=['Дата:T', alt.Tooltip('Расходы на маркетинг:Q', format=',.0f', title='Маркетинг, ₽')]
     )
 
+    # График конверсии (правая ось Y) - сплошная линия
     conversion_line = alt.Chart(agg).mark_line(
-        color='#003366',
-        strokeWidth=2
+        color=colors['conversion'],
+        strokeWidth=3,
+        interpolate='monotone'
     ).encode(
         x='Дата:T',
-        y=alt.Y('Конверсия:Q', axis=alt.Axis(title='Конверсия, %', titleColor='#003366')),
-        tooltip=['Конверсия:Q']
+        y=alt.Y('Конверсия:Q',
+            axis=alt.Axis(title='Конверсия, %', titleColor=colors['conversion'], orient='right'),
+            scale=alt.Scale(zero=False)),
+        tooltip=[alt.Tooltip('Конверсия:Q', format='.1f', title='Конверсия, %')]
     )
 
-    st.altair_chart(
-        (marketing_chart + conversion_line).resolve_scale(
-            y='independent'
-        ).properties(
-            height=350
-        ).interactive(),
-        use_container_width=True
-    )
+    # Объединяем графики
+    chart = (marketing_line + conversion_line).resolve_scale(
+        y='independent'
+    ).properties(
+        height=350,
+        title='Эффективность маркетинга'
+    ).configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True,
+        gridColor='#f0f0f0'
+    ).configure_axisLeft(
+        titlePadding=20,
+        titleFontSize=12,
+        labelColor=colors['marketing'],
+        titleColor=colors['marketing'],
+        titleY=-10,
+        titleAnchor='end'
+    ).configure_axisRight(
+        titlePadding=20,
+        titleFontSize=12,
+        labelColor=colors['conversion'],
+        titleColor=colors['conversion'],
+        titleY=-10,
+        titleAnchor='start',
+        titleX=40
+    ).interactive()
+
+    st.altair_chart(chart, use_container_width=True)
+
 
 with tab2:
     roi_chart = alt.Chart(agg).mark_line(
-        color='green',
+        color='#4a90e2',
         strokeWidth=3,
         interpolate='monotone'
     ).encode(
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None)),
-        y=alt.Y('ROI:Q', axis=alt.Axis(title='ROI (выручка/расходы)', titleColor='green')),
+        y=alt.Y('ROI:Q', axis=alt.Axis(title='ROI (выручка/расходы)', titleColor='#4a90e2')),
         tooltip=['Дата:T', 'ROI:Q']
     )
 
