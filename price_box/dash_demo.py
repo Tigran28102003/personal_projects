@@ -13,14 +13,13 @@ except:
     pass
 
 # ------------------- Кэширование данных -------------------
-@st.cache_data  # Кэшируем данные для ускорения работы приложения
+@st.cache_data
 def generate_data():
     categories = [
         "Смартфоны", "Ноутбуки", "Планшеты", "Смарт-часы", "Наушники",
         "Телевизоры", "МФУ/Принтеры", "Мониторы", "Клавиатуры", "Мыши"
     ]
 
-    # Генерация данных
     product_names = []
     product_cats = []
     for i in range(50):
@@ -30,13 +29,12 @@ def generate_data():
         product_cats.append(category)
 
     n_days = 365
-    start_date = pd.to_datetime("2024-01-01")
-    np.random.seed(42)
-    random.seed(42)
+    end_date = datetime.datetime.now()  # Текущая дата
+    start_date = end_date - datetime.timedelta(days=n_days-1)  # 365 дней назад
 
-    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
+    dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
-    # Генерация случайных данных с более реалистичными паттернами
+    # Остальная часть генерации данных остается без изменений
     base_sales = np.random.poisson(lam=12, size=(n_days, 50))
     base_returns = np.random.binomial(base_sales, 0.12)
     base_revenue = base_sales * np.random.randint(4000, 60000, size=(n_days, 50))
@@ -63,9 +61,10 @@ def generate_data():
     df["Средний чек"] = np.where(df["Продажи"] > 0, df["Выручка"] / df["Продажи"], 0)
     df["Прибыль"] = df["Выручка"] - (df["Расходы на маркетинг"] + df["Возвраты"] * df["Выручка"].mean() * 0.1)
     df["Дата_dt"] = pd.to_datetime(df["Дата"])
-    df["ROI"] = df["Выручка"] / df["Расходы на маркетинг"]  # Добавили ROI
+    df["ROI"] = df["Выручка"] / df["Расходы на маркетинг"]
 
     return df, categories
+
 
 df, categories = generate_data()
 
