@@ -194,7 +194,7 @@ line_sales = base.mark_line(color='#003366', size=3).encode(
 
 chart = alt.layer(bar_revenue, line_sales).resolve_scale(
     y='independent'
-).properties(width=600, height=400)
+).properties(width=600, height=400).interactive()
 
 st.altair_chart(chart, use_container_width=True)
 
