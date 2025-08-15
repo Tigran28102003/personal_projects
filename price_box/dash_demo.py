@@ -190,16 +190,6 @@ top_cats = (
     .agg({"Продажи": "sum", "Выручка": "sum"})
     .sort_values("Выручка", ascending=False)
     .head(5)
-)
-st.bar_chart(top_cats[["Выручка", "Продажи"]])
-
-# ТОП-5 товаров по продажам
-st.subheader("ТОП-5 товаров по продажам")
-top_cats = (
-    filt_df.groupby("Категория")
-    .agg({"Продажи": "sum", "Выручка": "sum"})
-    .sort_values("Выручка", ascending=False)
-    .head(5)
 ).reset_index()
 
 # Создаем Altair диаграмму с двумя осями Y и прозрачностью
@@ -242,6 +232,34 @@ chart = alt.hconcat(
 )
 
 st.altair_chart(chart, use_container_width=True)
+
+# ТОП-5 товаров по продажам
+st.subheader("ТОП-5 товаров по продажам")
+top5_goods = (
+    filt_df.groupby("Товар")
+    .agg({"Продажи": "sum", "Выручка": "sum"})
+    .sort_values("Продажи", ascending=False)
+    .head(5)
+)
+st.table(top5_goods.reset_index())
+
+# Средний рейтинг и средний чек с двумя осями Y и синими оттенками
+st.subheader("Средний рейтинг и средний чек")
+st.altair_chart(
+    alt.layer(
+        alt.Chart(agg).mark_line(color=color_profit).encode(
+            x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
+            y=alt.Y('Средний рейтинг:Q', axis=alt.Axis(title='Средний рейтинг', titleColor=color_profit))
+        ),
+        alt.Chart(agg).mark_line(color=color_sales).encode(
+            x='Дата:T',
+            y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
+        )
+    ).resolve_scale(
+        y='independent'
+    ).properties(width=700, height=350),
+    use_container_width=True
+)
 
 # Отображение данных по желанию пользователя
 show_data = st.checkbox("Показать все исходные данные по товарам")
