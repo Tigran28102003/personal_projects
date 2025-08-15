@@ -5,6 +5,7 @@ import altair as alt
 import random
 import locale
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 # Установить локаль на русскую
 try:
@@ -12,7 +13,17 @@ try:
 except:
     pass
 
-# ------------------- Кэширование данных -------------------
+# Устанавливаем стартовую и конечную даты
+start_date = datetime(2024, 1, 1)  # Фиксированная дата начала
+end_date = datetime.now()  # Текущая дата как конечная
+
+# Рассчитываем количество дней между датами
+n_days = (end_date - start_date).days + 1  # +1 чтобы включить обе граничные даты
+
+# Генерируем диапазон дат
+dates = pd.date_range(start=start_date, end=end_date, freq='D')
+
+# В функции generate_data() заменяем статический n_days на вычисленный:
 @st.cache_data
 def generate_data():
     categories = [
@@ -184,7 +195,7 @@ def plot_enhanced_revenue_profit_sales(df):
         opacity=0.6,
         interpolate='monotone'
     ).encode(
-        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#1f77b4', orient='left')),
+        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#1f77b4', orient='right')),
         tooltip=['Дата:T', 'Выручка:Q']
     )
 
