@@ -124,8 +124,9 @@ def plot_revenue_profit_sales(df):
         y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
     )
 
-    chart = alt.layer(line_revenue, line_profit
-                    #   , line_sales
+    chart = alt.layer(line_revenue
+                    #   , line_profit
+                      , line_sales
                 ).resolve_scale(
         y='independent'
     ).properties(width=700, height=350)
