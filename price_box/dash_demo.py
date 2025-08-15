@@ -225,11 +225,15 @@ st.altair_chart(plot_enhanced_revenue_profit_sales(agg), use_container_width=Tru
 
 # 2. Улучшенный график возвратов с областью и средней линией
 # Улучшенный график возвратов с правильными осями
+st.subheader("🔄 Анализ возвратов")
+agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
+
 return_chart = alt.Chart(agg).mark_bar(color='#4a90e2', opacity=0.7).encode(
     x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None)),
-    y=alt.Y('Возвраты:Q', axis=alt.Axis(title='Количество возвратов', titleColor='#4a90e2', orient='left')),
-    tooltip=['Дата:T', 'Возвраты:Q']
+    y=alt.Y('Возвраты:Q', axis=alt.Axis(title='Количество возвратов', titleColor='#4a90e2')),
+    tooltip=['Дата:T', 'Возвраты:Q', 'Доля возвратов, %:Q']
 )
+
 
 return_rate_line = alt.Chart(agg).mark_line(
     color='#003366',
