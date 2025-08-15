@@ -129,7 +129,10 @@ def plot_revenue_profit_sales(df):
 
     chart = alt.layer(line_revenue, line_profit, line_sales).resolve_scale(
         y='independent'
-    ).properties(width=700, height=350).interactive()
+    ).properties(
+        width=700, height=350
+    ).interactive()
+
     return chart
 
 st.subheader("Динамика выручки, прибыли и продаж")
@@ -149,7 +152,9 @@ st.altair_chart(
         )
     ).resolve_scale(
         y='independent'
-    ).properties(width=700, height=350),
+    ).properties(
+        width=700, height=350
+    ).interactive(),
     use_container_width=True
 )
 
@@ -166,7 +171,9 @@ st.altair_chart(
         )
     ).resolve_scale(
         y='independent'
-    ).properties(width=700, height=350),
+    ).properties(
+        width=700, height=350
+    ).interactive(),
     use_container_width=True
 )
 
@@ -221,9 +228,11 @@ st.altair_chart(
             x='Дата:T',
             y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
         )
-    ).interactive().resolve_scale(
+    ).resolve_scale(
         y='independent'
-    ).properties(width=700, height=350),
+    ).properties(
+        width=700, height=350
+    ).interactive(),
     use_container_width=True
 )
 
