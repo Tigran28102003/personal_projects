@@ -181,11 +181,11 @@ top_cats = (
 ).reset_index()
 
 base = alt.Chart(top_cats).encode(
-    x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории', title_color='#003366'))
+    x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории', titleColor='#003366'))
 )
 
 bar_revenue = base.mark_bar(color='#aec6cf', opacity=0.5).encode(
-    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', title_color='#aec6cf'))
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#aec6cf'))
 )
 
 line_sales = base.mark_line(color='#003366', size=3).encode(
