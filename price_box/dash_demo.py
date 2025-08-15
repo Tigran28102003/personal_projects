@@ -188,23 +188,34 @@ top_cats = (
 ).reset_index()
 
 # Преобразуем данные в длинный формат для группировки по типу значения (Выручка / Продажи)
-top_cats_long = pd.melt(
-    top_cats,
-    id_vars=['Категория'],
-    value_vars=['Выручка', 'Продажи'],
-    var_name='Тип',
-    value_name='Значение'
+st.subheader("ТОП-5 категорий по выручке и продажам (столбцы рядом с отдельными осями Y)")
+
+top_cats = (
+    filt_df.groupby("Категория")
+    .agg({"Продажи": "sum", "Выручка": "sum"})
+    .sort_values("Выручка", ascending=False)
+    .head(5)
+).reset_index()
+
+base = alt.Chart(top_cats).encode(
+    x=alt.X('Категория:N', axis=alt.Axis(title='Категории'), sort=top_cats['Категория'].tolist())
 )
 
-color_scale = alt.Scale(domain=['Выручка', 'Продажи'], range=['#00aaff', '#003366'])
+bar_revenue = base.mark_bar(color='#00aaff', opacity=0.7).encode(
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#00aaff'))
+)
 
-chart = alt.Chart(top_cats_long).mark_bar(opacity=0.7).encode(
-    x=alt.X('Категория:N', axis=alt.Axis(title='Категории')),
-    y=alt.Y('Значение:Q', axis=alt.Axis(title='Значение')),
-    color=alt.Color('Тип:N', scale=color_scale),
-    column=alt.Column('Тип:N', header=alt.Header(labelOrient='bottom'))
+bar_sales = base.mark_bar(color='#003366', opacity=0.7).encode(
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366')),
+    x=alt.X('Категория:N', axis=alt.Axis(labels=False), sort=top_cats['Категория'].tolist()),
+    # Чуть сдвинем, чтобы столбцы не накладывались
+    xOffset=20
+)
+
+chart = alt.layer(bar_revenue, bar_sales).resolve_scale(
+    y='independent'
 ).properties(
-    width=250,
+    width=600,
     height=400
 ).interactive()
 
