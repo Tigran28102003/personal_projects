@@ -186,6 +186,7 @@ def plot_enhanced_revenue_profit_sales(df):
         height=400,
         title='Динамика ключевых показателей'
     )
+    )
 
     # График выручки (левая ось Y)
     revenue = base.mark_area(
