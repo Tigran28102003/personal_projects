@@ -181,7 +181,7 @@ top_cats = (
 ).reset_index()
 
 base = alt.Chart(top_cats).encode(
-    x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории', titleColor='#003366'))
+    x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории'))
 )
 
 bar_revenue = base.mark_bar(color='#00aaff', opacity=0.5).encode(
