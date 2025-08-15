@@ -196,7 +196,7 @@ chart = alt.layer(bar_revenue, line_sales).resolve_scale(
     y='independent'
 ).properties(width=600, height=400).interactive()
 
-st.altair_chart(chart, use_container_width=True)
+st.altair_chart(chart, use_container_width=True).interactive()
 
 
 # ТОП-5 товаров по продажам
@@ -225,7 +225,7 @@ st.altair_chart(
         y='independent'
     ).properties(width=700, height=350),
     use_container_width=True
-)
+).interactive()
 
 # Отображение данных по желанию пользователя
 show_data = st.checkbox("Показать все исходные данные по товарам")
