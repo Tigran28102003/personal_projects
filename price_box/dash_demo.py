@@ -81,8 +81,9 @@ agg = filt_df.groupby("Дата").agg({
     "Средний чек": "mean",
     "Средний рейтинг": "mean",
     "Расходы на маркетинг": "sum",
-    "Конверсия": "mean"
+    "Конверсия": "mean"  # Эту строку добавить
 }).reset_index()
+
 
 items_sold = int(agg["Продажи"].sum())
 total_revenue = agg["Выручка"].sum()
