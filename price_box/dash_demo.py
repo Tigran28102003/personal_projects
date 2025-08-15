@@ -173,7 +173,7 @@ def plot_enhanced_revenue_profit_sales(df):
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None))
     )
 
-    # Area chart для выручки с градиентной заливкой
+    # Area chart для выручки
     area_revenue = base.mark_area(
         line={'color':'#1f77b4'},
         color=alt.Gradient(
@@ -185,23 +185,23 @@ def plot_enhanced_revenue_profit_sales(df):
         opacity=0.6,
         interpolate='monotone'
     ).encode(
-        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#1f77b4')),
-        tooltip=['Дата:T', 'Выручка:Q', 'Прибыль:Q', 'Продажи:Q']
+        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#1f77b4', orient='right')),
+        tooltip=['Дата:T', 'Выручка:Q']
     )
 
     # Линия для прибыли
     line_profit = base.mark_line(color='#4a90e2', strokeWidth=2).encode(
-        y=alt.Y('Прибыль:Q'),
+        y=alt.Y('Прибыль:Q', axis=None),
         tooltip=['Прибыль:Q']
     )
 
-    # Линия для продаж на второй оси
+    # Линия для продаж на отдельной оси
     line_sales = base.mark_line(color='#003366', strokeWidth=2).encode(
-        y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366')),
+        y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366', orient='left')),
         tooltip=['Продажи:Q']
     )
 
-    # Комбинированный график
+    # Комбинированный график с правильным расположением осей
     chart = alt.layer(
         area_revenue,
         line_profit,
@@ -210,6 +210,13 @@ def plot_enhanced_revenue_profit_sales(df):
         y='independent'
     ).properties(
         height=400
+    ).configure_axisLeft(
+        titlePadding=20,
+        titleFontSize=12
+    ).configure_axisRight(
+        titlePadding=20,
+        titleFontSize=12,
+        titleX=-10
     ).interactive()
 
     return chart
@@ -217,38 +224,34 @@ def plot_enhanced_revenue_profit_sales(df):
 st.altair_chart(plot_enhanced_revenue_profit_sales(agg), use_container_width=True)
 
 # 2. Улучшенный график возвратов с областью и средней линией
-st.subheader("🔄 Анализ возвратов")
-agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
-
+# Улучшенный график возвратов с правильными осями
 return_chart = alt.Chart(agg).mark_bar(color='#4a90e2', opacity=0.7).encode(
     x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None)),
-    y=alt.Y('Возвраты:Q', axis=alt.Axis(title='Количество возвратов', titleColor='#4a90e2')),
-    tooltip=['Дата:T', 'Возвраты:Q', 'Доля возвратов, %:Q']
+    y=alt.Y('Возвраты:Q', axis=alt.Axis(title='Количество возвратов', titleColor='#4a90e2', orient='left')),
+    tooltip=['Дата:T', 'Возвраты:Q']
 )
 
-return_rate_area = alt.Chart(agg).mark_area(
+return_rate_line = alt.Chart(agg).mark_line(
     color='#003366',
-    opacity=0.3,
-    interpolate='monotone'
+    strokeWidth=2
 ).encode(
     x='Дата:T',
-    y=alt.Y('Доля возвратов, %:Q', axis=alt.Axis(title='Доля возвратов, %', titleColor='#003366'))
-)
-
-mean_return_rate = alt.Chart(agg).mark_rule(
-    color='red',
-    strokeDash=[5,5]
-).encode(
-    y='mean(Доля возвратов, %):Q',
-    size=alt.value(1),
-    tooltip=[alt.Tooltip('mean(Доля возвратов, %):Q', title='Средняя доля возвратов')]
+    y=alt.Y('Доля возвратов, %:Q', axis=alt.Axis(title='Доля возвратов, %', titleColor='#003366', orient='right')),
+    tooltip=['Доля возвратов, %:Q']
 )
 
 st.altair_chart(
-    (return_chart + return_rate_area + mean_return_rate).resolve_scale(
+    (return_chart + return_rate_line).resolve_scale(
         y='independent'
     ).properties(
         height=350
+    ).configure_axisLeft(
+        titlePadding=20,
+        titleFontSize=12
+    ).configure_axisRight(
+        titlePadding=20,
+        titleFontSize=12,
+        titleX=-10
     ).interactive(),
     use_container_width=True
 )
@@ -397,6 +400,6 @@ with expander:
     st.download_button(
         label="📥 Скачать данные в CSV",
         data=csv,
-        file_name='ozon_sales_data.csv',
+        file_name='sales_data.csv',
         mime='text/csv'
     )
