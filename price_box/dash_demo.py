@@ -176,30 +176,40 @@ with st.container():
 
 # ------------------- Улучшенные визуализации -------------------
 
-# 1. График выручки, прибыли и продаж
+# 1. График выручки, прибыли и продаж (все линейные)
 st.subheader("📈 Динамика ключевых показателей")
 def plot_enhanced_revenue_profit_sales(df):
     # Создаем базовый график с настройкой оси X
     base = alt.Chart(df).encode(
-        x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None, grid=False))
+        x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None, grid=True, gridColor='#f0f0f0'))
+    ).properties(
+        height=400,
+        title='Динамика ключевых показателей'
     )
-    # График выручки (левая ось Y) - толстая синяя линия
+
+    # Цветовая схема (оттенки синего)
+    colors = {
+        'revenue': '#003366',  # Темно-синий (выручка)
+        'profit': '#4a90e2',   # Ярко-синий (прибыль)
+        'sales': '#88c1f4'     # Светло-голубой (продажи)
+    }
+
+    # График выручки (левая ось Y) - толстая темно-синяя линия
     revenue = base.mark_line(
-        color='#4a90e2',
+        color=colors['revenue'],
         strokeWidth=3,
         interpolate='monotone'
     ).encode(
         y=alt.Y('Выручка:Q',
-               axis=alt.Axis(title='Выручка/Прибыль, ₽', titleColor='#4a90e2'),
+               axis=alt.Axis(title='Выручка/Прибыль, ₽', titleColor=colors['revenue']),
                scale=alt.Scale(zero=False)),
         tooltip=['Дата:T', alt.Tooltip('Выручка:Q', format=',.0f', title='Выручка, ₽')]
     )
 
-    # График прибыли (левая ось Y) - пунктирная зеленая линия
+    # График прибыли (левая ось Y) - ярко-синяя линия средней толщины
     profit = base.mark_line(
-        color='#2ca02c',
-        strokeWidth=2,
-        strokeDash=[5, 3],
+        color=colors['profit'],
+        strokeWidth=2.5,
         interpolate='monotone'
     ).encode(
         y=alt.Y('Прибыль:Q',
@@ -207,14 +217,15 @@ def plot_enhanced_revenue_profit_sales(df):
         tooltip=['Дата:T', alt.Tooltip('Прибыль:Q', format=',.0f', title='Прибыль, ₽')]
     )
 
-    # График продаж (правая ось Y) - оранжевая линия
+    # График продаж (правая ось Y) - светло-голубая пунктирная линия
     sales = base.mark_line(
-        color='#ff7f0e',
+        color=colors['sales'],
         strokeWidth=2,
+        strokeDash=[5, 3],
         interpolate='monotone'
     ).encode(
         y=alt.Y('Продажи:Q',
-               axis=alt.Axis(title='Продажи, шт.', titleColor='#ff7f0e', orient='right'),
+               axis=alt.Axis(title='Продажи, шт.', titleColor=colors['sales'], orient='right'),
                scale=alt.Scale(zero=False)),
         tooltip=['Дата:T', alt.Tooltip('Продажи:Q', format=',d', title='Продажи, шт')]
     )
@@ -225,24 +236,24 @@ def plot_enhanced_revenue_profit_sales(df):
         sales              # Продажи на правой оси
     ).resolve_scale(
         y='independent'    # Раздельные шкалы для осей
-    ).properties(
-        height=400,
-        title='Динамика ключевых показателей'
     ).configure_view(
         strokeWidth=0      # Убираем границу
     ).configure_axis(
         grid=True,
-        gridColor='#f0f0f0'
+        gridColor='#f0f0f0',
+        domainWidth=1.5
     ).configure_axisLeft(
         titlePadding=20,
         titleFontSize=12,
-        labelColor='#4a90e2',
-        titleColor='#4a90e2'
+        labelColor=colors['revenue'],
+        titleColor=colors['revenue'],
+        domainColor=colors['revenue']
     ).configure_axisRight(
         titlePadding=20,
         titleFontSize=12,
-        labelColor='#ff7f0e',
-        titleColor='#ff7f0e',
+        labelColor=colors['sales'],
+        titleColor=colors['sales'],
+        domainColor=colors['sales'],
         titleX=40          # Отступ для правой оси
     ).interactive()
 
