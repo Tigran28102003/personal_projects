@@ -188,18 +188,19 @@ bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
     y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='blue'))
 )
 
-line_sales = base.mark_line(color='darkblue', size=3).encode(
-    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='darkblue')),
-    detail='Категория:N',
-    # point=alt.value(True)
+line_sales_line = base.mark_line(color='darkblue', size=3).encode(
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='darkblue'))
 )
 
-chart = alt.layer(bar_revenue, line_sales).resolve_scale(
+line_sales_points = base.mark_point(color='darkblue', size=50).encode(
+    y='Продажи:Q'
+)
+
+chart = alt.layer(bar_revenue, line_sales_line, line_sales_points).resolve_scale(
     y='independent'
 ).properties(width=600, height=400)
 
 st.altair_chart(chart, use_container_width=True)
-
 
 # ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
