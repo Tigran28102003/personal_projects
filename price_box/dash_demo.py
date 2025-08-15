@@ -87,47 +87,55 @@ total_marketing = agg["Расходы на маркетинг"].sum()
 
 st.title("Дашборд селлера маркетплейса: техника (демо-данные)")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Выручка, ₽", f"{total_revenue:,.0f}")
-col2.metric("Чистая прибыль, ₽", f"{total_profit:,.0f}")
-col3.metric("Продано товаров", items_sold)
-col4.metric("Средний чек, ₽", f"{avg_check:.0f}")
+with st.container():
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Выручка, ₽", f"{total_revenue:,.0f}")
+    col2.metric("Чистая прибыль, ₽", f"{total_profit:,.0f}")
+    col3.metric("Продано товаров", f"{items_sold:,d}")
+    col4.metric("Средний чек, ₽", f"{avg_check:,.0f}")
 
-col5, col6, col7, col8 = st.columns(4)
-col5.metric("Доля возвратов, %", f"{return_rate:.1f}")
-col6.metric("Средний рейтинг", f"{avg_rating:.2f}")
-col7.metric("Конверсия, %", f"{avg_conv:.2f}")
-col8.metric("Расходы на рекламу, ₽", f"{total_marketing:,.0f}")
-
+with st.container():
+    col5, col6, col7, col8 = st.columns(4)
+    col5.metric("Доля возвратов, %", f"{return_rate:.1f}")
+    col6.metric("Средний рейтинг", f"{avg_rating:.2f}")
+    col7.metric("Конверсия, %", f"{avg_conv:.2f}")
+    col8.metric("Расходы на рекламу, ₽", f"{total_marketing:,.0f}")
 # Оттенки синего для линий
 color_revenue = "#1f77b4"  # оттенок синего для выручки
 color_profit = "#4a90e2"   # светлее синий для прибыли
 color_sales = "#003366"    # тёмно-синий для продаж
 
-# Функция для комбинированного графика с двумя осями Y и оттенками синего
-def plot_blue_shades_secondary_y(df, x, y1, y2, y1_label, y2_label):
-    base = alt.Chart(df).encode(x=alt.X(x, axis=alt.Axis(labelAngle=45)))
 
-    line1 = base.mark_line(color=color_revenue).encode(
-        y=alt.Y(y1, axis=alt.Axis(title=y1_label, titleColor=color_revenue))
-    )
-    line2 = base.mark_line(color=color_profit).encode(
-        y=alt.Y(y2, axis=alt.Axis(title=y2_label, titleColor=color_profit))
-    )
-    # Дополнительная линия для продаж на отдельной оси Y
-    line3 = base.mark_line(color=color_sales).encode(
-        y=alt.Y("Продажи:Q", axis=alt.Axis(title="Продажи, шт.", titleColor=color_sales))
+def plot_revenue_profit_sales(df):
+    base = alt.Chart(df).encode(
+        x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45))
     )
 
-    chart = alt.layer(line1, line2, line3).resolve_scale(
-        y = 'independent'
+    # Общая ось слева для выручки и прибыли
+    line_revenue = base.mark_line(color=color_revenue).encode(
+        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка и Прибыль, ₽', titleColor=color_revenue))
+    )
+    line_profit = base.mark_line(color=color_profit).encode(
+        y=alt.Y('Прибыль:Q')
+    )
+
+    # Отдельная ось справа для продаж
+    line_sales = base.mark_line(color=color_sales).encode(
+        y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor=color_sales))
+    )
+
+    chart = alt.layer(line_revenue, line_profit, line_sales).resolve_scale(
+        y='independent'
     ).properties(width=700, height=350)
     return chart
+
+# Использование:
+st.altair_chart(plot_revenue_profit_sales(agg), use_container_width=True)
 
 # Построение первого графика с продажами на отдельной оси Y и оттенками синего
 st.subheader("Динамика выручки, прибыли и продаж")
 st.altair_chart(
-    plot_blue_shades_secondary_y(
+    plot_revenue_profit_sales(
         agg,
         'Дата',
         'Выручка',
