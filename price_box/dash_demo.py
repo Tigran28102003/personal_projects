@@ -178,7 +178,7 @@ st.altair_chart(
 )
 
 # ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)
-st.subheader("ТОП-5 категорий по выручке и продажам (выручка — столбцы, продажи — линия)")
+st.subheader("ТОП-5 категорий по выручке и продажам (столбцы рядом)")
 
 top_cats = (
     filt_df.groupby("Категория")
@@ -187,24 +187,28 @@ top_cats = (
     .head(5)
 ).reset_index()
 
-base = alt.Chart(top_cats).encode(
-    x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории'))
+# Преобразуем данные в длинный формат для группировки по типу значения (Выручка / Продажи)
+top_cats_long = pd.melt(
+    top_cats,
+    id_vars=['Категория'],
+    value_vars=['Выручка', 'Продажи'],
+    var_name='Тип',
+    value_name='Значение'
 )
 
-bar_revenue = base.mark_bar(color='#00aaff', opacity=0.5).encode(
-    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#00aaff'))
-)
+color_scale = alt.Scale(domain=['Выручка', 'Продажи'], range=['#00aaff', '#003366'])
 
-line_sales = base.mark_line(color='#003366', size=3).encode(
-    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366'))
-)
+chart = alt.Chart(top_cats_long).mark_bar(opacity=0.7).encode(
+    x=alt.X('Категория:N', axis=alt.Axis(title='Категории')),
+    y=alt.Y('Значение:Q', axis=alt.Axis(title='Значение')),
+    color=alt.Color('Тип:N', scale=color_scale),
+    column=alt.Column('Тип:N', header=alt.Header(labelOrient='bottom'))
+).properties(
+    width=250,
+    height=400
+).interactive()
 
-chart = alt.layer(bar_revenue, line_sales).resolve_scale(
-    y='independent'
-).properties(width=600, height=400).interactive()
-
-st.altair_chart(chart, use_container_width=True).interactive()
-
+st.altair_chart(chart, use_container_width=True)
 
 # ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
