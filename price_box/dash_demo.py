@@ -183,63 +183,62 @@ def plot_enhanced_revenue_profit_sales(df):
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None))
     )
 
-    # Линия для выручки (без градиента)
+    # Линия для выручки (основная левая ось)
     line_revenue = base.mark_line(
         color='#1f77b4',
-        strokeWidth=3,
-        interpolate='monotone'
+        strokeWidth=3
     ).encode(
         y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка/Прибыль, ₽', titleColor='#1f77b4')),
         tooltip=['Дата:T', 'Выручка:Q']
     )
 
-    # Линия для прибыли
+    # Линия для прибыли (левая ось)
     line_profit = base.mark_line(
         color='#4a90e2',
         strokeWidth=2,
-        strokeDash=[5,3],  # Пунктирная линия для различия
-        interpolate='monotone'
+        strokeDash=[5,3]
     ).encode(
-        y=alt.Y('Прибыль:Q'),
+        y='Прибыль:Q',
         tooltip=['Прибыль:Q']
     )
 
-    # Линия для продаж на отдельной оси
-    line_sales = base.mark_bar(  # Используем столбцы для лучшей визуализации
+    # Столбцы для продаж (правая ось)
+    bar_sales = base.mark_bar(
         color='#003366',
-        opacity=0.7,
+        opacity=0.3,
         binSpacing=0
     ).encode(
         y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366')),
         tooltip=['Продажи:Q']
     )
 
-    # Комбинированный график
+    # Комбинируем все графики на одном полотне
     chart = alt.layer(
         line_revenue,
-        line_profit
-    ).resolve_scale().properties(height=400)  # Общая шкала для выручки и прибыли
-
-    sales_chart = alt.layer(line_sales).resolve_scale(
-        y='independent'
-    ).properties(height=400)
-
-    # Объединяем графики
-    final_chart = alt.concat(
-        chart,
-        sales_chart
+        line_profit,
+        bar_sales
     ).resolve_scale(
         y='independent'
+    ).properties(
+        height=400
+    ).configure_axisLeft(
+        titlePadding=20,
+        titleFontSize=12,
+        labelColor='#1f77b4',
+        titleColor='#1f77b4'
+    ).configure_axisRight(
+        titlePadding=20,
+        titleFontSize=12,
+        labelColor='#003366',
+        titleColor='#003366',
+        titleX=45
     ).configure_view(
         strokeWidth=0
-    ).configure_axis(
-        grid=False
     ).interactive()
 
-    return final_chart
+    return chart
 
 st.altair_chart(plot_enhanced_revenue_profit_sales(agg), use_container_width=True)
-
 
 # 2. Улучшенный график возвратов с областью и средней линией
 # Улучшенный график возвратов с правильными осями
