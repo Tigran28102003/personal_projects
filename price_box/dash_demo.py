@@ -269,17 +269,17 @@ agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg[
 
 # Цветовая схема
 colors = {
-    'returns': '#4a90e2',
-    'rate': '#003366'
+    'returns': '#003366',   # Тёмно-синий для количества возвратов
+    'rate': '#4a90e2'      # Ярко-синий для доли возвратов
 }
 
 # График количества возвратов (левая ось Y)
 returns_line = alt.Chart(agg).mark_line(
     color=colors['returns'],
-    strokeWidth=3,
+    strokeWidth=2.5,
     interpolate='monotone'
 ).encode(
-    x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None)),
+    x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None, grid=False)),
     y=alt.Y('Возвраты:Q',
            axis=alt.Axis(title='Количество возвратов', titleColor=colors['returns']),
            scale=alt.Scale(zero=False)),
@@ -288,11 +288,10 @@ returns_line = alt.Chart(agg).mark_line(
             alt.Tooltip('Доля возвратов, %:Q', format='.1f', title='Доля возвратов, %')]
 )
 
-# График доли возвратов (правая ось Y)
+# График доли возвратов (правая ось Y) - теперь сплошная линия
 return_rate_line = alt.Chart(agg).mark_line(
     color=colors['rate'],
-    strokeWidth=3,
-    strokeDash=[5, 3],
+    strokeWidth=2.5,
     interpolate='monotone'
 ).encode(
     x='Дата:T',
@@ -306,28 +305,28 @@ return_rate_line = alt.Chart(agg).mark_line(
 chart = (returns_line + return_rate_line).resolve_scale(
     y='independent'
 ).properties(
-    height=350
+    height=350,
+    title='Динамика возвратов'
 ).configure_view(
     strokeWidth=0
 ).configure_axis(
     grid=True,
-    gridColor='#f0f0f0',
-    domainWidth=1.5
+    gridColor='#f0f0f0'
 ).configure_axisLeft(
     titlePadding=20,
     titleFontSize=12,
     labelColor=colors['returns'],
     titleColor=colors['returns'],
-    titleY=-10,  # Поднимаем заголовок левой оси выше
+    titleY=-10,
     titleAnchor='end'
 ).configure_axisRight(
     titlePadding=20,
     titleFontSize=12,
     labelColor=colors['rate'],
     titleColor=colors['rate'],
-    titleY=-10,  # Поднимаем заголовок правой оси выше
-    titleAnchor='start',  # Выравниваем по началу (левой стороне)
-    titleX=40    # Отступ для правой оси
+    titleY=-10,
+    titleAnchor='start',
+    titleX=40
 ).interactive()
 
 st.altair_chart(chart, use_container_width=True)
