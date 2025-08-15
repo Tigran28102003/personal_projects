@@ -187,32 +187,28 @@ top_cats = (
     .head(5)
 ).reset_index()
 
-# Создаем "длинный" формат с дополнительным столбцом сдвига для позиции
-top_cats_long = pd.melt(
-    top_cats,
-    id_vars=['Категория'],
-    value_vars=['Выручка', 'Продажи'],
-    var_name='Показатель',
-    value_name='Значение'
+base = alt.Chart(top_cats).encode(
+    x=alt.X('Категория:N', axis=alt.Axis(title='Категории'), sort=top_cats['Категория'].tolist())
 )
 
-# Добавим столбец 'Offset' для сдвига по оси X
-top_cats_long['Offset'] = top_cats_long['Показатель'].apply(lambda x: -0.15 if x == 'Выручка' else 0.15)
+bar_revenue = base.mark_bar(color='#00aaff', opacity=0.7).encode(
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#00aaff'))
+)
 
-color_scale = alt.Scale(domain=['Выручка', 'Продажи'], range=['#00aaff', '#003366'])
+bar_sales = base.mark_bar(color='#003366', opacity=0.7).encode(
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366')),
+    x=alt.X('Категория:N', axis=alt.Axis(labels=False), sort=top_cats['Категория'].tolist()),
+    xOffset=20  # сдвигаем вправо столбцы продаж
+)
 
-chart = alt.Chart(top_cats_long).mark_bar(opacity=0.7).encode(
-    x=alt.X('Категория:N', axis=alt.Axis(title='Категории')),
-    y=alt.Y('Значение:Q', axis=alt.Axis(title='Значение')),
-    color=alt.Color('Показатель:N', scale=color_scale),
-    xOffset=alt.XOffset('Offset:Q')
+chart = alt.layer(bar_revenue, bar_sales).resolve_scale(
+    y='independent'
 ).properties(
     width=600,
     height=400
 ).interactive()
 
 st.altair_chart(chart, use_container_width=True)
-
 # ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
 top5_goods = (
