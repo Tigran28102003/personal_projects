@@ -129,7 +129,7 @@ def plot_revenue_profit_sales(df):
 
     chart = alt.layer(line_revenue, line_profit, line_sales).resolve_scale(
         y='independent'
-    ).properties(width=700, height=350)
+    ).properties(width=700, height=350).interactive()
     return chart
 
 st.subheader("Динамика выручки, прибыли и продаж")
