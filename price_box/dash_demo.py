@@ -267,37 +267,71 @@ st.altair_chart(plot_enhanced_revenue_profit_sales(agg), use_container_width=Tru
 st.subheader("🔄 Анализ возвратов")
 agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
 
-return_chart = alt.Chart(agg).mark_bar(color='#4a90e2', opacity=0.7).encode(
+# Цветовая схема
+colors = {
+    'returns': '#4a90e2',   # Синий для количества возвратов
+    'rate': '#ff7f0e'      # Оранжевый для доли возвратов
+}
+
+# График количества возвратов (левая ось Y)
+returns_line = alt.Chart(agg).mark_line(
+    color=colors['returns'],
+    strokeWidth=3,
+    interpolate='monotone'
+).encode(
     x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None)),
-    y=alt.Y('Возвраты:Q', axis=alt.Axis(title='Количество возвратов', titleColor='#4a90e2')),
-    tooltip=['Дата:T', 'Возвраты:Q', 'Доля возвратов, %:Q']
+    y=alt.Y('Возвраты:Q',
+           axis=alt.Axis(title='Количество возвратов', titleColor=colors['returns']),
+           scale=alt.Scale(zero=False)),
+    tooltip=['Дата:T',
+            alt.Tooltip('Возвраты:Q', format=',d', title='Возвраты'),
+            alt.Tooltip('Доля возвратов, %:Q', format='.1f', title='Доля возвратов, %')]
 )
 
-
+# График доли возвратов (правая ось Y)
 return_rate_line = alt.Chart(agg).mark_line(
-    color='#003366',
-    strokeWidth=2
+    color=colors['rate'],
+    strokeWidth=3,
+    strokeDash=[5, 3],
+    interpolate='monotone'
 ).encode(
     x='Дата:T',
-    y=alt.Y('Доля возвратов, %:Q', axis=alt.Axis(title='Доля возвратов, %', titleColor='#003366', orient='right')),
+    y=alt.Y('Доля возвратов, %:Q',
+           axis=alt.Axis(title='Доля возвратов, %', titleColor=colors['rate'], orient='right'),
+           scale=alt.Scale(zero=False)),
     tooltip=['Доля возвратов, %:Q']
 )
 
-st.altair_chart(
-    (return_chart + return_rate_line).resolve_scale(
-        y='independent'
-    ).properties(
-        height=350
-    ).configure_axisLeft(
-        titlePadding=20,
-        titleFontSize=12
-    ).configure_axisRight(
-        titlePadding=20,
-        titleFontSize=12,
-        titleX=-10
-    ).interactive(),
-    use_container_width=True
-)
+# Объединяем графики
+chart = (returns_line + return_rate_line).resolve_scale(
+    y='independent'
+).properties(
+    height=350
+).configure_view(
+    strokeWidth=0
+).configure_axis(
+    grid=True,
+    gridColor='#f0f0f0',
+    domainWidth=1.5
+).configure_axisLeft(
+    titlePadding=20,
+    titleFontSize=12,
+    labelColor=colors['returns'],
+    titleColor=colors['returns'],
+    titleY=-10,  # Поднимаем заголовок левой оси выше
+    titleAnchor='end'
+).configure_axisRight(
+    titlePadding=20,
+    titleFontSize=12,
+    labelColor=colors['rate'],
+    titleColor=colors['rate'],
+    titleY=-10,  # Поднимаем заголовок правой оси выше
+    titleAnchor='start',  # Выравниваем по началу (левой стороне)
+    titleX=40    # Отступ для правой оси
+).interactive()
+
+st.altair_chart(chart, use_container_width=True)
+
 
 # 3. График маркетинга и конверсии с ROI
 st.subheader("📢 Эффективность маркетинга")
