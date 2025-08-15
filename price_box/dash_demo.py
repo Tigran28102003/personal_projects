@@ -6,6 +6,9 @@ np.random.seed(42)
 
 n_days = 360
 
+start_date = pd.to_datetime("2024-01-01")
+dates = pd.date_range(start=start_date, periods=n_days, freq='D')
+
 # Продажи (пуассон)
 sales = np.random.poisson(lam=20, size=n_days)
 
@@ -39,18 +42,17 @@ avg_conv = conversion.mean() * 100
 total_marketing = marketing.sum()
 
 df = pd.DataFrame({
-    "День": range(1, n_days+1),
+    "Дата": dates,
     "Продажи": sales,
     "Выручка": revenue,
     "Возвраты": returns,
-    "Средний рейтинг": ratings.round(2),
-    "Остатки на складе": stocks,
-    "Расходы на маркетинг": marketing.round(2),
-    "CR (конверсия)": conversion.round(2)
+    "Средний рейтинг": ratings,
+    "Расходы на маркетинг": marketing,
+    "Конверсия": conversion,
+    "Прибыль": profit.round(2)
 })
 
 st.title("Демо-дашборд клиента")
-
 
 # Карточки с ключевыми метриками
 col1, col2, col3, col4 = st.columns(4)
@@ -65,9 +67,26 @@ col6.metric("Средний рейтинг", f"{avg_rating:.2f}")
 col7.metric("Конверсия, %", f"{avg_conv:.2f}")
 col8.metric("Расходы на рекламу, ₽", f"{total_marketing:,.0f}")
 
+# Фильтр временного периода для графиков
+start_filter, end_filter = st.date_input(
+    "Выберите временной период для анализа",
+    value=[start_date, start_date + pd.Timedelta(days=n_days-1)],
+    min_value=start_date,
+    max_value=start_date + pd.Timedelta(days=n_days-1)
+)
 
-st.line_chart(df.set_index("День")[["Продажи", "Выручка", "Возвраты", "Остатки на складе"]])
-st.bar_chart(df.set_index("День")["Расходы на маркетинг"])
-st.line_chart(df.set_index("День")[["Средний рейтинг", "CR (конверсия)"]])
+# Фильтрация данных по выбранному диапазону
+filtered_df = df[(df["Дата"] >= pd.to_datetime(start_filter)) & (df["Дата"] <= pd.to_datetime(end_filter))]
 
-st.dataframe(df)
+# Графики по фильтрованным данным
+st.subheader("Продажи, Выручка, Возвраты, Остатки")
+st.line_chart(filtered_df.set_index("Дата")[["Продажи", "Выручка", "Возвраты"]])
+
+st.subheader("Расходы на маркетинг")
+st.bar_chart(filtered_df.set_index("Дата")["Расходы на маркетинг"])
+
+st.subheader("Средний рейтинг и Конверсия")
+st.line_chart(filtered_df.set_index("Дата")[["Средний рейтинг", "Конверсия"]])
+
+# Таблица с отфильтрованными данными
+st.dataframe(filtered_df.reset_index(drop=True))
