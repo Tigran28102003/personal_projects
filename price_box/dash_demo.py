@@ -173,31 +173,28 @@ st.altair_chart(
 # ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)
 st.subheader("ТОП-5 категорий по выручке и продажам (перекрывающиеся диаграммы)")
 
-top_cats = (
-    filt_df.groupby("Категория")
-    .agg({"Продажи": "sum", "Выручка": "sum"})
-    .sort_values("Выручка", ascending=False)
-    .head(5)
-).reset_index()
-
-base = alt.Chart(top_cats).encode(
-    x=alt.X('Категория:N', sort='-y')
+top_cats_long = pd.melt(
+    top_cats,
+    id_vars=['Категория'],
+    value_vars=['Выручка', 'Продажи'],
+    var_name='Группа',
+    value_name='Значение'
 )
 
-bar_revenue = base.mark_bar(color='blue', opacity=0.5, width=30).encode(
-    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽'))
-)
+color_scale = alt.Scale(domain=['Выручка', 'Продажи'], range=['blue', 'darkblue'])
 
-bar_sales = base.mark_bar(color='darkblue', opacity=0.5, width=20).encode(
-    y=alt.Y('Продажи:Q', axis=None),
-    xOffset=10  # сдвиг выступающего бара вправо для перекрытия
+chart = alt.Chart(top_cats_long).mark_bar(opacity=0.5).encode(
+    x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории')),
+    y=alt.Y('Значение:Q', axis=alt.Axis(title='Значение')),
+    color=alt.Color('Группа:N', scale=color_scale),
+    xOffset=alt.XOffset('Группа:N')
+).properties(
+    width=500,
+    height=400
 )
-
-chart = alt.layer(bar_revenue, bar_sales).resolve_scale(
-    y='independent'
-).properties(width=500, height=400)
 
 st.altair_chart(chart, use_container_width=True)
+
 
 # ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
