@@ -189,10 +189,10 @@ bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
 )
 
 line_sales_line = base.mark_line(color='darkblue', size=3).encode(
-    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='darkblue'))
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.'))
 )
 
-line_sales_points = base.mark_point(color='darkblue', size=50).encode(
+line_sales_points = base.mark_point(color='lightblue', size=50).encode(
     y='Продажи:Q'
 )
 
