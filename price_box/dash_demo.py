@@ -184,12 +184,12 @@ base = alt.Chart(top_cats).encode(
     x=alt.X('Категория:N', sort='-y', axis=alt.Axis(title='Категории'))
 )
 
-bar_revenue = base.mark_bar(color='blue', opacity=0.5).encode(
-    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='blue'))
+bar_revenue = base.mark_bar(color='#aec6cf', opacity=0.5).encode(
+    y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽'))
 )
 
-line_sales = base.mark_line(color='darkblue', size=3).encode(
-    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='darkblue'))
+line_sales = base.mark_line(color='#00aaff', size=3).encode(
+    y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.'))
 )
 
 chart = alt.layer(bar_revenue, line_sales).resolve_scale(
