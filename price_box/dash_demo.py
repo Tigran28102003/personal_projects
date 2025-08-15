@@ -4,6 +4,14 @@ import pandas as pd
 import altair as alt
 import random
 
+import locale
+
+# Установить локаль на русскую (если система это поддерживает)
+try:
+    locale.setlocale(locale.LC_TIME, 'ru_RU.UTF-8')
+except:
+    pass  # Если не удалось, продолжим без изменения локали
+
 # ------------------- Генерация справочников -------------------
 
 categories = [
@@ -21,7 +29,7 @@ for i in range(50):
 
 # ------------------- Основные параметры и генерация -------------------
 
-n_days = 30
+n_days = 365
 start_date = pd.to_datetime("2024-01-01")
 np.random.seed(42)
 random.seed(42)
