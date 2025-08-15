@@ -197,7 +197,7 @@ def plot_enhanced_revenue_profit_sales(df):
     # График прибыли (левая ось Y)
     profit = base.mark_line(
         color='#4a90e2',
-        strokeWidth=2,
+        strokeWidth=3,
         strokeDash=[5,3]
     ).encode(
         y=alt.Y('Прибыль:Q',
