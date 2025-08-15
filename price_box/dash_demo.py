@@ -171,6 +171,7 @@ st.subheader("📈 Динамика ключевых показателей")
 def plot_enhanced_revenue_profit_sales(df):
     base = alt.Chart(df).encode(
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None))
+    )
 
     # Area chart для выручки с градиентной заливкой
     area_revenue = base.mark_area(
