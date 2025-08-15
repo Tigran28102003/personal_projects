@@ -218,23 +218,23 @@ st.table(top5_goods.reset_index())
 
 # Средний рейтинг и средний чек
 st.subheader("Средний рейтинг и средний чек")
-st.altair_chart(
-    alt.layer(
-        alt.Chart(agg).mark_line(color=color_profit).encode(
-            x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
-            y=alt.Y('Средний рейтинг:Q', axis=alt.Axis(title='Средний рейтинг', titleColor=color_profit))
-        ),
-        alt.Chart(agg).mark_line(color=color_sales).encode(
-            x='Дата:T',
-            y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
-        )
-    ).resolve_scale(
-        y='independent'
-    ).properties(
-        width=700, height=350
-    ).interactive(),
-    use_container_width=True
-)
+chart = alt.layer(
+    alt.Chart(agg).mark_line(color=color_profit).encode(
+        x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
+        y=alt.Y('Средний рейтинг:Q', axis=alt.Axis(title='Средний рейтинг', titleColor=color_profit))
+    ),
+    alt.Chart(agg).mark_line(color=color_sales).encode(
+        x='Дата:T',
+        y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
+    )
+).resolve_scale(
+    y='independent'
+).properties(
+    width=700, height=350
+).interactive()
+
+st.altair_chart(chart, use_container_width=True)
+
 
 # Отображение данных по желанию пользователя
 show_data = st.checkbox("Показать все исходные данные по товарам")
