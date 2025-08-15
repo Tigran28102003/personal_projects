@@ -221,11 +221,11 @@ st.altair_chart(
             x='Дата:T',
             y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
         )
-    ).resolve_scale(
+    ).interactive().resolve_scale(
         y='independent'
     ).properties(width=700, height=350),
     use_container_width=True
-).interactive()
+)
 
 # Отображение данных по желанию пользователя
 show_data = st.checkbox("Показать все исходные данные по товарам")
