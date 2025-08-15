@@ -6,13 +6,11 @@ import random
 
 # ------------------- Генерация справочников -------------------
 
-# Категории техники
 categories = [
     "Смартфоны", "Ноутбуки", "Планшеты", "Смарт-часы", "Наушники",
     "Телевизоры", "МФУ/Принтеры", "Мониторы", "Клавиатуры", "Мыши"
 ]
 
-# 50 наименований товаров с уникальным названием и категорией
 product_names = []
 product_cats = []
 for i in range(50):
@@ -101,58 +99,83 @@ col6.metric("Средний рейтинг", f"{avg_rating:.2f}")
 col7.metric("Конверсия, %", f"{avg_conv:.2f}")
 col8.metric("Расходы на рекламу, ₽", f"{total_marketing:,.0f}")
 
-# Функция для построения комбинированного графика с двумя осями Y с помощью Altair
-def plot_with_secondary_y(df, x, y1, y2, y1_label, y2_label):
+# Оттенки синего для линий
+color_revenue = "#1f77b4"  # оттенок синего для выручки
+color_profit = "#4a90e2"   # светлее синий для прибыли
+color_sales = "#003366"    # тёмно-синий для продаж
+
+# Функция для комбинированного графика с двумя осями Y и оттенками синего
+def plot_blue_shades_secondary_y(df, x, y1, y2, y1_label, y2_label):
     base = alt.Chart(df).encode(x=alt.X(x, axis=alt.Axis(labelAngle=45)))
 
-    line1 = base.mark_line(color="blue").encode(
-        y=alt.Y(y1, axis=alt.Axis(title=y1_label, titleColor="blue"))
+    line1 = base.mark_line(color=color_revenue).encode(
+        y=alt.Y(y1, axis=alt.Axis(title=y1_label, titleColor=color_revenue))
     )
-    line2 = base.mark_line(color="red").encode(
-        y=alt.Y(y2, axis=alt.Axis(title=y2_label, titleColor="red"))
+    line2 = base.mark_line(color=color_profit).encode(
+        y=alt.Y(y2, axis=alt.Axis(title=y2_label, titleColor=color_profit))
+    )
+    # Дополнительная линия для продаж на отдельной оси Y
+    line3 = base.mark_line(color=color_sales).encode(
+        y=alt.Y("Продажи:Q", axis=alt.Axis(title="Продажи, шт.", titleColor=color_sales))
     )
 
-    chart = alt.layer(line1, line2).resolve_scale(
+    chart = alt.layer(line1, line2, line3).resolve_scale(
         y = 'independent'
     ).properties(width=700, height=350)
     return chart
 
-# 1. Динамика выручки, продаж, прибыли: без вторичной оси
-st.subheader("Динамика ключевых финансовых показателей")
-st.line_chart(
-    agg.set_index("Дата")[["Выручка", "Продажи", "Прибыль"]]
+# Построение первого графика с продажами на отдельной оси Y и оттенками синего
+st.subheader("Динамика выручки, прибыли и продаж")
+st.altair_chart(
+    plot_blue_shades_secondary_y(
+        agg,
+        'Дата',
+        'Выручка',
+        'Прибыль',
+        'Выручка, ₽',
+        'Прибыль, ₽'
+    ),
+    use_container_width=True
 )
 
-# 2. Возвраты и доля возвратов (доля как вторичная ось)
+# Возвраты и доля возвратов (доля как вторичная ось)
 agg["Доля возвратов, %"] = np.where(agg["Продажи"] > 0, agg["Возвраты"] / agg["Продажи"] * 100, 0)
 st.subheader("Возвраты и их доля (%)")
 st.altair_chart(
-    plot_with_secondary_y(
-        agg,
-        'Дата',
-        'Возвраты',
-        'Доля возвратов, %',
-        'Количество возвратов',
-        'Доля возвратов, %'
-    ),
+    alt.layer(
+        alt.Chart(agg).mark_bar(color="#4a90e2").encode(
+            x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
+            y=alt.Y('Возвраты:Q', axis=alt.Axis(title='Количество возвратов', titleColor="#4a90e2"))
+        ),
+        alt.Chart(agg).mark_line(color="#003366").encode(
+            x='Дата:T',
+            y=alt.Y('Доля возвратов, %:Q', axis=alt.Axis(title='Доля возвратов, %', titleColor="#003366"))
+        )
+    ).resolve_scale(
+        y='independent'
+    ).properties(width=700, height=350),
     use_container_width=True
 )
 
-# 3. Расходы на маркетинг и конверсия (конверсия — вторичная ось)
+# Расходы на маркетинг и конверсия (конверсия — вторичная ось)
 st.subheader("Расходы на маркетинг и конверсия")
 st.altair_chart(
-    plot_with_secondary_y(
-        agg,
-        'Дата',
-        'Расходы на маркетинг',
-        'Конверсия',
-        'Расходы на маркетинг, ₽',
-        'Конверсия, %'
-    ),
+    alt.layer(
+        alt.Chart(agg).mark_line(color="#1f77b4").encode(
+            x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
+            y=alt.Y('Расходы на маркетинг:Q', axis=alt.Axis(title='Расходы на маркетинг, ₽', titleColor="#1f77b4"))
+        ),
+        alt.Chart(agg).mark_line(color="#003366").encode(
+            x='Дата:T',
+            y=alt.Y('Конверсия:Q', axis=alt.Axis(title='Конверсия, %', titleColor="#003366"))
+        )
+    ).resolve_scale(
+        y='independent'
+    ).properties(width=700, height=350),
     use_container_width=True
 )
 
-# 4. ТОП-5 категорий по выручке и продажам
+# ТОП-5 категорий по выручке и продажам
 st.subheader("ТОП-5 категорий по выручке и продажам")
 top_cats = (
     filt_df.groupby("Категория")
@@ -162,7 +185,7 @@ top_cats = (
 )
 st.bar_chart(top_cats[["Выручка", "Продажи"]])
 
-# 5. ТОП-5 товаров по продажам
+# ТОП-5 товаров по продажам
 st.subheader("ТОП-5 товаров по продажам")
 top5_goods = (
     filt_df.groupby("Товар")
@@ -172,21 +195,25 @@ top5_goods = (
 )
 st.table(top5_goods.reset_index())
 
-# 6. График среднего рейтинга и среднего чека с двумя осями Y
+# Средний рейтинг и средний чек с двумя осями Y и синими оттенками
 st.subheader("Средний рейтинг и средний чек")
 st.altair_chart(
-    plot_with_secondary_y(
-        agg,
-        'Дата',
-        'Средний рейтинг',
-        'Средний чек',
-        'Средний рейтинг',
-        'Средний чек, ₽'
-    ),
+    alt.layer(
+        alt.Chart(agg).mark_line(color=color_profit).encode(
+            x=alt.X('Дата:T', axis=alt.Axis(labelAngle=45)),
+            y=alt.Y('Средний рейтинг:Q', axis=alt.Axis(title='Средний рейтинг', titleColor=color_profit))
+        ),
+        alt.Chart(agg).mark_line(color=color_sales).encode(
+            x='Дата:T',
+            y=alt.Y('Средний чек:Q', axis=alt.Axis(title='Средний чек, ₽', titleColor=color_sales))
+        )
+    ).resolve_scale(
+        y='independent'
+    ).properties(width=700, height=350),
     use_container_width=True
 )
 
-# Данные со всеми товарами — только по желанию пользователя
+# Отображение данных по желанию пользователя
 show_data = st.checkbox("Показать все исходные данные по товарам")
 if show_data:
     st.dataframe(filt_df.drop(columns=["Дата_dt"]).reset_index(drop=True))
