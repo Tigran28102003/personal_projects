@@ -185,7 +185,7 @@ def plot_enhanced_revenue_profit_sales(df):
         opacity=0.6,
         interpolate='monotone'
     ).encode(
-        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#1f77b4', orient='right')),
+        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка, ₽', titleColor='#1f77b4', orient='left')),
         tooltip=['Дата:T', 'Выручка:Q']
     )
 
