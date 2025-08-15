@@ -179,50 +179,51 @@ with st.container():
 # 1. График выручки, прибыли и продаж с area chart и tooltips
 st.subheader("📈 Динамика ключевых показателей")
 def plot_enhanced_revenue_profit_sales(df):
+    # Базовый график с настройкой оси X
     base = alt.Chart(df).encode(
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None))
     )
 
-    # Линия для выручки (основная левая ось)
-    line_revenue = base.mark_line(
+    # График выручки (левая ось Y)
+    revenue = base.mark_line(
         color='#1f77b4',
-        strokeWidth=3,
-        interpolate='monotone'
+        strokeWidth=3
     ).encode(
-        y=alt.Y('Выручка:Q', axis=alt.Axis(title='Выручка/Прибыль, ₽', titleColor='#1f77b4')),
-        tooltip=['Дата:T', 'Выручка:Q']
+        y=alt.Y('Выручка:Q',
+               axis=alt.Axis(title='Выручка/Прибыль, ₽', titleColor='#1f77b4'),
+               scale=alt.Scale(zero=False))  # Не начинать с нуля для лучшей детализации
     )
 
-    # Линия для прибыли (левая ось)
-    line_profit = base.mark_line(
+    # График прибыли (левая ось Y)
+    profit = base.mark_line(
         color='#4a90e2',
         strokeWidth=2,
-        strokeDash=[5,3],
-        interpolate='monotone'
+        strokeDash=[5,3]
     ).encode(
-        y='Прибыль:Q',
-        tooltip=['Прибыль:Q']
+        y=alt.Y('Прибыль:Q',
+               scale=alt.Scale(zero=False))
     )
 
-    # Линия для продаж (правая ось)
-    line_sales = base.mark_line(
+    # График продаж (правая ось Y)
+    sales = base.mark_line(
         color='#003366',
-        strokeWidth=2,
-        interpolate='monotone'
+        strokeWidth=2
     ).encode(
-        y=alt.Y('Продажи:Q', axis=alt.Axis(title='Продажи, шт.', titleColor='#003366')),
-        tooltip=['Продажи:Q']
+        y=alt.Y('Продажи:Q',
+               axis=alt.Axis(title='Продажи, шт.', titleColor='#003366', orient='right'),
+               scale=alt.Scale(zero=False))
     )
 
-    # Комбинируем все линейные графики на одном полотне
+    # Объединяем все графики
     chart = alt.layer(
-        line_revenue,
-        line_profit,
-        line_sales
+        revenue,
+        profit,
+        sales
     ).resolve_scale(
-        y='independent'
+        y='independent'  # Раздельные шкалы для осей Y
     ).properties(
-        height=400
+        height=400,
+        title='Динамика ключевых показателей'
     ).configure_axisLeft(
         titlePadding=20,
         titleFontSize=12,
@@ -233,14 +234,15 @@ def plot_enhanced_revenue_profit_sales(df):
         titleFontSize=12,
         labelColor='#003366',
         titleColor='#003366',
-        titleX=45
+        titleX=40  # Отступ для правой оси
     ).configure_view(
-        strokeWidth=0
+        strokeWidth=0  # Убираем границу
     ).interactive()
 
     return chart
 
 st.altair_chart(plot_enhanced_revenue_profit_sales(agg), use_container_width=True)
+
 
 
 # 2. Улучшенный график возвратов с областью и средней линией
