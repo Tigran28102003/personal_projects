@@ -182,11 +182,12 @@ def plot_enhanced_revenue_profit_sales(df):
     # Создаем базовый график с настройкой оси X
     base = alt.Chart(df).encode(
         x=alt.X('Дата:T', axis=alt.Axis(labelAngle=-45, title=None, grid=False)
+        )
     ).properties(
         height=400,
         title='Динамика ключевых показателей'
     )
-    )
+
 
     # График выручки (левая ось Y)
     revenue = base.mark_area(
