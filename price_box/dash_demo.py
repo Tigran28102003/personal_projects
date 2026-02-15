@@ -73,7 +73,6 @@ def generate_data():
 
     return df, categories
 
-
 df, categories = generate_data()
 
 # ------------------- Фильтры -------------------
