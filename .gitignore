@@ -1,10 +1,27 @@
 .vscode/settings.json
+.DS_Store
 
-# Jupyter
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
+# Environment & Secrets
+.env
+.python-version
 
-.DS_Store
-__pycache__/
-*.py[cod]
+# IDE
+.vscode/
+.idea/
+
+# Data (чтобы не пушить тяжелые файлы)
+*.csv
+*.json
+*.parquet
