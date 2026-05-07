@@ -14,7 +14,7 @@ validation:
   predict_growth: true
 
 tuning:
-  n_trials: 50
+  n_trials: 20          # 20 trials TPE достаточно для 6-8 параметров; финальный fit — полный
   inner_val_years: 2
 
 models:

@@ -36,7 +36,24 @@ def run_ablation_study(
     best_model_cls: type[BaseForecaster],
     folds: list[dict],
     feature_groups: dict[str, list[str]],
+    model_config: dict | None = None,
 ) -> pd.DataFrame:
+    """
+    Ablation study: incrementally add feature blocks and measure RMSE.
+
+    Parameters
+    ----------
+    best_model_cls : type[BaseForecaster]
+        Class of the best model (e.g. CatBoostForecaster).
+    folds : list[dict]
+        Cross-validation folds from build_folds().
+    feature_groups : dict[str, list[str]]
+        Mapping block_name -> list of feature column names.
+    model_config : dict | None
+        Hyperparameters forwarded to best_model_cls(**model_config).
+        If None, defaults to {} (model uses its own defaults).
+        Pass CONFIG["models"]["catboost"] etc. for reproducible results.
+    """
     scenarios = {
         "A0": ["LAG_BLOCK"],
         "A1": ["LAG_BLOCK", "PRODUCTION_BLOCK", "INVESTMENT_BLOCK"],
@@ -54,16 +71,23 @@ def run_ablation_study(
             "SHOCK_BLOCK",
         ],
     }
+    cfg = dict(model_config or {})
     rows: list[dict] = []
     for scenario, blocks in scenarios.items():
         selected = _columns_for_blocks(feature_groups, blocks)
         for fold in folds:
             X_train = _filter_features(fold["X_train"], selected)
             X_test = _filter_features(fold["X_test"], selected)
-            model = best_model_cls()
+            model = best_model_cls(**cfg)
             model.fit(X_train, fold["y_train"])
             y_pred = model.predict(X_test)
-            y_bench = X_test["log_grp_lag1"].astype(float).to_numpy()
+            # Use the same benchmark as run_cross_validation:
+            # fold["y_bench"] is mean growth rate (predict_growth=True)
+            # or log_grp_lag1 level (predict_growth=False).
+            y_bench = np.asarray(
+                fold.get("y_bench", X_test["log_grp_lag1"].astype(float).to_numpy()),
+                dtype=float,
+            )
             metrics = compute_metrics(fold["y_test"].to_numpy(), y_pred, y_bench)
             rows.append(
                 {

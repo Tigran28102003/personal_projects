@@ -140,22 +140,37 @@ class NaiveForecaster(BaseForecaster):
 
 class AR1Forecaster(BaseForecaster):
     """
-    Region-wise OLS: y_{i,t+1} = alpha_i + rho_i * y_{i,t}.
-    Regions with fewer than three usable observations fall back to naive.
+    Region-wise OLS AR(1).
+
+    Level mode (predict_growth=False, default):
+        log_grp_{i,t} = alpha_i + rho_i * log_grp_{i,t-1}
+        Regressor: log_grp_lag1 (level).
+
+    Growth mode (predict_growth=True):
+        Δlog_grp_{i,t} = alpha_i + rho_i * Δlog_grp_{i,t-1}
+        Regressor: grp_growth_lag1 (lagged growth rate).
+        This is a proper AR(1) in growth-rate space.
+
+    Regions with fewer than three usable observations fall back to naive
+    (mean of y_train for that region, or global mean if unavailable).
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, predict_growth: bool = False):
+        super().__init__(predict_growth=predict_growth)
+        self.predict_growth: bool = predict_growth
         self.coefs_: dict[str, tuple[float, float]] = {}
+        self.global_mean_: float = 0.0
 
     def fit(self, X_train: pd.DataFrame, y_train: pd.Series) -> None:
-        if "log_grp_lag1" not in X_train.columns:
-            raise ValueError("AR1Forecaster requires log_grp_lag1 in X_train.")
+        x_col = "grp_growth_lag1" if self.predict_growth else "log_grp_lag1"
+        if x_col not in X_train.columns:
+            raise ValueError(f"AR1Forecaster requires '{x_col}' in X_train.")
         regions = _region_ids(X_train)
+        self.global_mean_ = float(y_train.mean())
         data = pd.DataFrame(
             {
                 "region_id": regions,
-                "x": X_train["log_grp_lag1"].astype(float),
+                "x": X_train[x_col].astype(float),
                 "y": y_train.astype(float),
             },
             index=X_train.index,
@@ -170,12 +185,18 @@ class AR1Forecaster(BaseForecaster):
         return None
 
     def predict(self, X_test: pd.DataFrame) -> np.ndarray:
-        lag = X_test["log_grp_lag1"].astype(float).to_numpy()
+        x_col = "grp_growth_lag1" if self.predict_growth else "log_grp_lag1"
+        if x_col not in X_test.columns:
+            raise ValueError(f"AR1Forecaster requires '{x_col}' in X_test.")
+        lag = X_test[x_col].astype(float).to_numpy()
         regions = _region_ids(X_test).to_numpy()
         pred = np.empty(len(X_test), dtype=float)
         for idx, region_id in enumerate(regions):
             alpha_rho = self.coefs_.get(str(region_id))
-            pred[idx] = lag[idx] if alpha_rho is None else alpha_rho[0] + alpha_rho[1] * lag[idx]
+            if alpha_rho is None:
+                pred[idx] = self.global_mean_
+            else:
+                pred[idx] = alpha_rho[0] + alpha_rho[1] * lag[idx]
         return pred
 
 
@@ -307,7 +328,7 @@ class LGBMForecaster(BaseForecaster):
         X_pred = _transform_numeric_preprocessor(X_test, self.preprocessor_)
         return np.asarray(self.model_.predict(X_pred), dtype=float)
 
-    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 50) -> None:
+    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> None:
         import optuna
         from lightgbm import LGBMRegressor
 
@@ -324,10 +345,16 @@ class LGBMForecaster(BaseForecaster):
         y_inner = y_train.loc[train_mask].astype(float)
         y_val = y_train.loc[val_mask].astype(float)
 
+        # Число деревьев внутри пробы намеренно сокращено (100 вместо 300):
+        # это ускоряет каждый trial в ~3x, практически не влияя на ранжирование
+        # конфигураций. После поиска финальный fit выполняется с полным n_estimators.
+        _TRIAL_N_ESTIMATORS = 100
+
         def objective(trial: optuna.Trial) -> float:
             params = dict(self.params)
             params.update(
                 {
+                    "n_estimators": _TRIAL_N_ESTIMATORS,
                     "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
                     "max_depth": trial.suggest_int("max_depth", 3, 8),
                     "num_leaves": trial.suggest_int("num_leaves", 15, 127),
@@ -336,6 +363,8 @@ class LGBMForecaster(BaseForecaster):
                     "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
                     "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10, log=True),
                     "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10, log=True),
+                    "n_jobs": -1,
+                    "verbose": -1,
                 }
             )
             model = LGBMRegressor(**params)
@@ -346,7 +375,10 @@ class LGBMForecaster(BaseForecaster):
         sampler = optuna.samplers.TPESampler(seed=int(self.params.get("random_state", 42)))
         study = optuna.create_study(direction="minimize", sampler=sampler)
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-        self.params.update(study.best_params)
+        # Применяем лучшие параметры (без n_estimators: финальный fit берёт его из self.params)
+        best = {k: v for k, v in study.best_params.items() if k != "n_estimators"}
+        self.params.update(best)
+        self.params.setdefault("n_jobs", -1)   # параллельное обучение деревьев
         self.fit(X_train, y_train)
         return None
 
@@ -393,7 +425,7 @@ class CatBoostForecaster(BaseForecaster):
         X_pred = _transform_numeric_preprocessor(X_test, self.preprocessor_)
         return np.asarray(self.model_.predict(X_pred), dtype=float)
 
-    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 50) -> None:
+    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> None:
         import optuna
         from catboost import CatBoostRegressor
 
@@ -407,14 +439,19 @@ class CatBoostForecaster(BaseForecaster):
             missing_drop_threshold=self.missing_drop_threshold,
         )
         X_val = _transform_numeric_preprocessor(X_train.loc[val_mask], preprocessor)
-        cat_features = []
+        cat_features: list[int] = []
         y_inner = y_train.loc[train_mask].astype(float)
         y_val = y_train.loc[val_mask].astype(float)
+
+        # Урезаем число итераций внутри проб (~3x быстрее).
+        # Финальный fit после поиска использует полное self.params["iterations"].
+        _TRIAL_ITERATIONS = 150
 
         def objective(trial: optuna.Trial) -> float:
             params = dict(self.params)
             params.update(
                 {
+                    "iterations": _TRIAL_ITERATIONS,
                     "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
                     "depth": trial.suggest_int("depth", 4, 10),
                     "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1, 20, log=True),
@@ -430,7 +467,9 @@ class CatBoostForecaster(BaseForecaster):
         sampler = optuna.samplers.TPESampler(seed=int(self.params.get("random_seed", 42)))
         study = optuna.create_study(direction="minimize", sampler=sampler)
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-        self.params.update(study.best_params)
+        # Применяем без iterations: финальный fit берёт полное число из self.params
+        best = {k: v for k, v in study.best_params.items() if k != "iterations"}
+        self.params.update(best)
         self.fit(X_train, y_train)
         return None
 
@@ -509,7 +548,7 @@ class GPBoostForecaster(BaseForecaster):
                 pred = self.booster_.predict(X_pred)
         return self._extract_pred_mean(pred)
 
-    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 30) -> None:
+    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> None:
         import optuna
 
         train_mask, val_mask = _last_year_validation_split(X_train, inner_val_years=2)
@@ -517,13 +556,17 @@ class GPBoostForecaster(BaseForecaster):
             self.fit(X_train, y_train)
             return None
 
+        # Урезаем num_boost_round внутри проб: быстрая оценка структуры дерева.
+        # Финальный fit после поиска использует полное self.params["num_boost_round"].
+        _TRIAL_ROUNDS = 100
+
         def objective(trial: optuna.Trial) -> float:
             trial_model = GPBoostForecaster(
                 group_col=self.group_col,
                 learning_rate=trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
                 max_depth=trial.suggest_int("max_depth", 3, 7),
                 num_leaves=trial.suggest_int("num_leaves", 15, 63),
-                num_boost_round=trial.suggest_int("num_boost_round", 100, 500),
+                num_boost_round=_TRIAL_ROUNDS,   # фиксировано для скорости
                 missing_drop_threshold=self.missing_drop_threshold,
                 random_state=int(self.params.get("random_state", 42)),
                 verbose_eval=False,
@@ -535,7 +578,9 @@ class GPBoostForecaster(BaseForecaster):
         sampler = optuna.samplers.TPESampler(seed=int(self.params.get("random_state", 42)))
         study = optuna.create_study(direction="minimize", sampler=sampler)
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-        self.params.update(study.best_params)
+        # Финальный fit с полным num_boost_round из self.params (не из проб)
+        best = {k: v for k, v in study.best_params.items() if k != "num_boost_round"}
+        self.params.update(best)
         self.fit(X_train, y_train)
         return None
 
@@ -854,7 +899,7 @@ def get_all_models(config: dict, predict_growth: bool = False) -> list[BaseForec
         cfg.setdefault("missing_drop_threshold", missing_drop_threshold)
     models: list[BaseForecaster] = [
         NaiveForecaster(predict_growth=predict_growth),
-        AR1Forecaster(),
+        AR1Forecaster(predict_growth=predict_growth),
         RidgeFEForecaster(**ridge_cfg),
         LGBMForecaster(**lgbm_cfg),
         CatBoostForecaster(**cat_cfg),
