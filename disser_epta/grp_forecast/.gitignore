@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+catboost_info/
+
+figures/*.png
+
+data/processed/*
+!data/processed/folds/
+data/processed/folds/*
+!data/processed/folds/.gitkeep

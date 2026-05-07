@@ -1,0 +1,407 @@
+% =====================================================================
+%  Предзащита ВКР — Прогнозирование ВРП регионов РФ
+%  XeLaTeX + Beamer 16:9 | HSE style
+% =====================================================================
+\documentclass[aspectratio=169,10pt]{beamer}
+
+% ---------- Пакеты -------------------------------------------------
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{russian}
+\setotherlanguage{english}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{amsmath}
+
+% ---------- Цвета HSE ----------------------------------------------
+\definecolor{hseblue}{HTML}{0B3D91}
+\definecolor{hselightblue}{HTML}{5B8DB8}
+\definecolor{hsegray}{HTML}{F2F2F2}
+\definecolor{hsedarkgray}{HTML}{4A4A4A}
+\definecolor{hseaccent}{HTML}{D4312C}
+
+% ---------- Beamer тема --------------------------------------------
+\usetheme{default}
+\usecolortheme{default}
+\usefonttheme{professionalfonts}
+
+\setbeamercolor{frametitle}{fg=white, bg=hseblue}
+\setbeamercolor{title}{fg=white}
+\setbeamercolor{subtitle}{fg=hselightblue!80!white}
+\setbeamercolor{author}{fg=white}
+\setbeamercolor{date}{fg=hselightblue!70!white}
+\setbeamercolor{institute}{fg=hselightblue!70!white}
+\setbeamercolor{titlelike}{fg=hseblue}
+\setbeamercolor{structure}{fg=hseblue}
+\setbeamercolor{normal text}{fg=hsedarkgray}
+\setbeamercolor{block title}{bg=hseblue, fg=white}
+\setbeamercolor{block body}{bg=hsegray, fg=hsedarkgray}
+\setbeamercolor{alerted text}{fg=hseaccent}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{frametitle}{
+  \begin{beamercolorbox}[wd=\paperwidth, dp=0.18cm, leftskip=0.6cm, rightskip=0.4cm, sep=0.16cm]{frametitle}
+    \usebeamerfont{frametitle}\insertframetitle
+  \end{beamercolorbox}
+}
+
+\setbeamertemplate{footline}{
+  \begin{beamercolorbox}[wd=\paperwidth, ht=0.4cm, dp=0.15cm]{structure}
+    \hfill
+    \textcolor{hseblue!60}{\scriptsize \insertframenumber\,/\,\inserttotalframenumber}
+    \hspace{0.4cm}
+  \end{beamercolorbox}
+}
+
+\setbeamertemplate{itemize item}{\textcolor{hseblue}{\small$\blacktriangleright$}}
+\setbeamertemplate{itemize subitem}{\textcolor{hselightblue}{\small$\bullet$}}
+
+% ---------- Титульный слайд ----------------------------------------
+\title{\large Машинное обучение в прогнозировании\\валового регионального продукта\\субъектов Российской Федерации}
+\subtitle{Предзащита выпускной квалификационной работы}
+\author{Семенюченко Артём Геннадьевич}
+\institute{Научный руководитель: Паточенко Евгений Анатольевич\\
+           Программа «Анализ больших данных», ФКН НИУ ВШЭ}
+\date{2026}
+
+% ===================================================================
+\begin{document}
+
+% ------ Слайд 1: Титульный ----------------------------------------
+\begin{frame}[plain]
+\begin{tikzpicture}[remember picture, overlay]
+  \fill[hseblue] (current page.north west) rectangle (current page.south east);
+  \fill[hseblue!80!black] (current page.south west) rectangle
+        ([yshift=0.9cm]current page.south east);
+\end{tikzpicture}
+\vspace{0.9cm}
+\titlepage
+\end{frame}
+
+
+% ------ Слайд 2: Мотивация ----------------------------------------
+\begin{frame}{Мотивация и актуальность}
+\begin{columns}[T]
+\column{0.55\textwidth}
+\textbf{Почему это важно?}
+\medskip
+\begin{itemize}\setlength\itemsep{4pt}\small
+  \item ВРП — ключевой показатель социально-экономического развития регионов
+  \item Используется для межбюджетных трансфертов и регионального планирования
+  \item Официальные данные Росстат публикуются с лагом 1–2 года
+  \item Традиционные методы (ARIMA, VAR) не учитывают нелинейности и пространственную гетерогенность
+\end{itemize}
+\column{0.42\textwidth}
+\begin{block}{Исследовательский вопрос}
+\small Могут ли методы ML обеспечить точный прогноз ВРП для 85 регионов РФ на горизонте 1 год, превосходя наивные бенчмарки?
+\end{block}
+\smallskip
+\begin{block}{Практическая ценность}
+\small Ранняя оценка ВРП позволяет оперативно корректировать политику регионального развития
+\end{block}
+\end{columns}
+\end{frame}
+
+
+% ------ Слайд 3: Цель и задачи ------------------------------------
+\begin{frame}{Цель и задачи исследования}
+\begin{columns}[T]
+\column{0.48\textwidth}
+\begin{alertblock}{Цель}
+\small Разработать ML-пайплайн прогнозирования ВРП регионов РФ с интерпретируемостью через SHAP
+\end{alertblock}
+\medskip
+\textbf{Задачи:}
+\begin{enumerate}\setlength\itemsep{3pt}\small
+  \item Панельный датасет 2005–2023, 85 регионов
+  \item Расширяющееся окно без утечки данных
+  \item Сравнение бустинга (LGBM, CatBoost, GPBoost) с бенчмарками
+  \item Аблационный анализ блоков признаков
+  \item Устойчивость к выбросам и кризисам
+  \item Глобальный и локальный SHAP-анализ
+\end{enumerate}
+\column{0.48\textwidth}
+\begin{block}{Новизна работы}
+\begin{itemize}\setlength\itemsep{4pt}
+  \item Первое систематическое сравнение ML-моделей на панельных данных ВРП всех регионов РФ
+  \item Интеграция GPBoost (гауссовы процессы + бустинг) для учёта пространственной корреляции
+  \item Блочный SHAP-анализ по типам регионов
+\end{itemize}
+\end{block}
+\end{columns}
+\end{frame}
+
+
+% ------ Слайд 4: Данные -------------------------------------------
+\begin{frame}{Данные}
+\begin{columns}[T]
+\column{0.55\textwidth}
+\textbf{Источник:} Росстат, база данных показателей субъектов РФ
+\medskip
+\begin{itemize}\setlength\itemsep{4pt}
+  \item \textbf{Период:} 2005–2023 гг.
+  \item \textbf{Объектов:} 85 регионов (отфильтровано $\geq$80 по покрытию)
+  \item \textbf{Целевая переменная:} $\Delta \log(\text{ВРП}_{\text{реал}})$ — темп прироста реального ВРП
+  \item \textbf{Блоки признаков:}
+  \begin{itemize}
+    \item Лаги ВРП и темпов роста (AR-компонента)
+    \item Инвестиции, доходы, промышленность
+    \item Занятость, демография
+    \item Бюджетные показатели
+    \item Временны́е и региональные эффекты
+  \end{itemize}
+\end{itemize}
+\column{0.42\textwidth}
+\begin{block}{Предобработка}
+\begin{itemize}\setlength\itemsep{3pt}
+  \item Логарифмирование стоимостных показателей
+  \item RobustScaler по train-выборке каждого фолда
+  \item Медианная импутация пропусков
+  \item Порог пропусков: 40\%
+  \item Исключение признаков с будущей информацией
+\end{itemize}
+\end{block}
+\begin{block}{Кризисные периоды}
+\small 2008–09, 2014–15, 2020, 2022–23
+\end{block}
+\end{columns}
+\end{frame}
+
+
+% ------ Слайд 5: Методология --------------------------------------
+\begin{frame}{Методология: расширяющееся скользящее окно}
+\begin{columns}[T]
+\column{0.54\textwidth}
+\textbf{Схема валидации (9 фолдов):}
+\medskip
+
+\begin{tabular}{lcc}
+\toprule
+Фолд & Train & Test \\
+\midrule
+1 & 2005–2014 & 2015 \\
+2 & 2005–2015 & 2016 \\
+$\vdots$ & $\vdots$ & $\vdots$ \\
+9 & 2005–2022 & 2023 \\
+\bottomrule
+\end{tabular}
+\medskip
+
+\begin{itemize}\setlength\itemsep{4pt}
+  \item Минимум 10 лет на обучение
+  \item \textbf{FeatureBuilder} обучается только на train
+  \item Нет утечки через масштабирование и импутацию
+\end{itemize}
+
+\column{0.43\textwidth}
+\begin{block}{Метрики}
+$$\text{RMSE} = \sqrt{\frac{1}{N}\sum_i(y_i - \hat{y}_i)^2}$$
+$$\text{MAE} = \frac{1}{N}\sum_i|y_i - \hat{y}_i|$$
+$$\text{OOS-}R^2 = 1 - \frac{\sum(y_i-\hat{y}_i)^2}{\sum(y_i-\bar{y}_{\text{train}})^2}$$
+\end{block}
+\medskip
+\begin{alertblock}{Бенчмарк}
+Наивная модель: $\hat{y}_i = \bar{y}_{\text{train}}$ (среднее темпа роста)
+\end{alertblock}
+\end{columns}
+\end{frame}
+
+
+% ------ Слайд 6: Инженерия признаков -----------------------------
+\begin{frame}{Архитектура признаков}
+\begin{columns}[T]
+\column{0.48\textwidth}
+\textbf{Блоки признаков (аблационный анализ):}
+\medskip
+\begin{itemize}\setlength\itemsep{5pt}
+  \item \textbf{A0 — Полный набор} (baseline)
+  \item \textbf{A1 — без AR-лагов}: влияние автокорреляции ВРП
+  \item \textbf{A2 — без инвестиций}: роль капитальных вложений
+  \item \textbf{A3 — без доходов}: эффект доходов населения
+  \item \textbf{A4 — без бюджета}: бюджетный канал
+  \item \textbf{A5 — без временны́х эффектов}: макросинхронизация
+\end{itemize}
+\column{0.48\textwidth}
+\begin{block}{Принцип «no leakage»}
+Все преобразования признаков (скейлинг, импутация, кодирование) применяются строго на train-части каждого фолда. Test-данные преобразуются параметрами, оцененными только на train.
+\end{block}
+\medskip
+\begin{block}{Лаговая структура}
+Для цели $\Delta\log(\text{ВРП}_t)$ используются значения признаков $t-1$, что исключает информацию о тестовом периоде.
+\end{block}
+\end{columns}
+\end{frame}
+
+
+% ------ Слайд 7: Модели -------------------------------------------
+\begin{frame}{Модели прогнозирования}
+\begin{columns}[T]
+\column{0.48\textwidth}
+\textbf{ML-модели:}
+\begin{itemize}\setlength\itemsep{4pt}
+  \item \textbf{LGBM} — LightGBM, gradient boosting на деревьях
+  \item \textbf{CatBoost} — Yandex, нативная обработка категориальных признаков
+  \item \textbf{GPBoost} — комбинация GB + гауссовые процессы, учёт случайных эффектов регионов
+\end{itemize}
+\medskip
+\textbf{Бенчмарки:}
+\begin{itemize}\setlength\itemsep{4pt}
+  \item \textbf{Ridge} — L2-регрессия, перекрёстная валидация $\lambda$
+  \item \textbf{AR(1)} — авторегрессия в пространстве темпов роста
+  \item \textbf{Naive} — среднее темпа роста по train
+\end{itemize}
+\column{0.48\textwidth}
+\begin{block}{Подбор гиперпараметров}
+\begin{itemize}\setlength\itemsep{2pt}\small
+  \item Optuna TPE, 20 итераций
+  \item Быстрые trial: n\_estimators снижен
+  \item Финальный fit: полные 300/500/300
+  \item Inner-val: последние 2 года train
+\end{itemize}
+\end{block}
+\smallskip
+\begin{block}{Интерпретируемость}
+\small \texttt{shap.TreeExplainer}: глобальный, групповой и локальный SHAP
+\end{block}
+\end{columns}
+\end{frame}
+
+
+% ------ Слайд 8: Основные результаты — таблица -------------------
+\begin{frame}{Основные результаты: сводная таблица метрик}
+\vspace{-6pt}
+\begin{center}
+\includegraphics[width=0.92\textwidth,trim=0 30 0 30,clip]{grp_forecast/figures/metrics_table.png}
+\end{center}
+\vspace{-2pt}
+\centering\small Зелёным — лучшее значение. OOS-$R^2>0$: модель превосходит наивный бенчмарк.
+\end{frame}
+
+
+% ------ Слайд 9: Динамика RMSE по фолдам -------------------------
+\begin{frame}{Динамика RMSE по годам прогноза}
+\begin{center}
+\includegraphics[width=0.90\textwidth]{grp_forecast/figures/rmse_over_time.png}
+\end{center}
+\vspace{-4pt}
+\small
+Серые полосы — кризисные периоды (2008–09, 2014–15, 2020, 2022–23).
+Все модели показывают всплески ошибок в кризисные годы, что ожидаемо.
+\end{frame}
+
+
+% ------ Слайд 10: Ошибки по регионам -----------------------------
+\begin{frame}{Ошибки прогноза: региональная структура}
+\begin{columns}[T]
+\column{0.50\textwidth}
+\centering
+\textbf{Топ-20 регионов по MAE}\\[4pt]
+\includegraphics[width=\textwidth]{grp_forecast/figures/error_by_region.png}
+\column{0.48\textwidth}
+\centering
+\textbf{Тепловая карта ошибок (регион × год)}\\[4pt]
+\includegraphics[width=\textwidth]{grp_forecast/figures/error_heatmap.png}
+\end{columns}
+\vspace{2pt}
+\small Наибольшие ошибки — в ресурсодобывающих регионах (ЯНАО, Сахалин) и в периоды структурных шоков.
+\end{frame}
+
+
+% ------ Слайд 11: SHAP глобальный ---------------------------------
+\begin{frame}{SHAP: глобальная важность признаков}
+\begin{columns}[T]
+\column{0.49\textwidth}
+\centering
+\textbf{Средний |SHAP|}\\[4pt]
+\includegraphics[width=\textwidth,height=5.2cm,keepaspectratio]{grp_forecast/figures/shap_global.png}
+\column{0.49\textwidth}
+\centering
+\textbf{Beeswarm (направление эффекта)}\\[4pt]
+\includegraphics[width=\textwidth,height=5.2cm,keepaspectratio]{grp_forecast/figures/shap_beeswarm.png}
+\end{columns}
+\vspace{2pt}
+\small Доминирует AR-компонента; инвестиции и доходы — второй блок. Beeswarm подтверждает ожидаемые знаки эффектов.
+\end{frame}
+
+
+% ------ Слайд 12: SHAP групповой ----------------------------------
+\begin{frame}{SHAP: блоки признаков по типам регионов}
+\begin{center}
+\includegraphics[width=0.80\textwidth]{grp_forecast/figures/shap_group_heatmap.png}
+\end{center}
+\vspace{-4pt}
+\small
+Тепловая карта показывает, что для ресурсодобывающих регионов важнее отраслевые и инвестиционные признаки,
+а для регионов-лидеров сервисной экономики (Москва, СПб) — потребительские и бюджетные блоки.
+\end{frame}
+
+
+% ------ Слайд 13: Аблационный анализ ------------------------------
+\begin{frame}{Аблационный анализ блоков признаков}
+\begin{center}
+\includegraphics[width=0.74\textwidth]{grp_forecast/figures/ablation_study.png}
+\end{center}
+\vspace{-2pt}
+\small A0 — полный набор. Удаление AR-лагов (A1) и инвестиций (A2) даёт наибольший рост RMSE.
+\end{frame}
+
+
+% ------ Слайд 14: Устойчивость ------------------------------------
+\begin{frame}{Устойчивость модели}
+\begin{columns}[T]
+\column{0.49\textwidth}
+\centering
+\textbf{Исключение структурных выбросов}\\[4pt]
+\includegraphics[width=\textwidth]{grp_forecast/figures/rc1_outliers.png}
+\small\\
+Полная выборка vs. без Москвы, ХМАО, ЯНАО, Сахалина
+\column{0.49\textwidth}
+\centering
+\textbf{Кризисные vs. обычные периоды}\\[4pt]
+\includegraphics[width=\textwidth]{grp_forecast/figures/rc2_crisis.png}
+\small\\
+RMSE на фолдах кризисных лет существенно выше
+\end{columns}
+\vspace{4pt}
+\small ML-модели устойчивы к исключению структурных выбросов: RMSE меняется несущественно.
+На кризисных фолдах точность падает, однако ML превосходит бенчмарки и в этом режиме.
+\end{frame}
+
+
+% ------ Слайд 15: Заключение --------------------------------------
+\begin{frame}{Заключение и вклад}
+\begin{columns}[T]
+\column{0.55\textwidth}
+\textbf{Основные результаты:}
+\begin{itemize}\setlength\itemsep{4pt}\small
+  \item Лучшая модель (LGBM / CatBoost) превосходит наивный бенчмарк на всех 9 фолдах
+  \item OOS-$R^2 > 0$ — информативное прогнозирование подтверждено
+  \item AR-лаги и инвестиции — ключевые предикторы (SHAP + аблация)
+  \item Устойчивость к выбросам; ошибки растут в кризисные периоды
+\end{itemize}
+\column{0.42\textwidth}
+\begin{block}{Научный вклад}
+\begin{itemize}\setlength\itemsep{3pt}\small
+  \item Воспроизводимый пайплайн для панельного прогнозирования ВРП
+  \item Строгая OOS-методология для региональной экономики
+  \item Блочный SHAP — экономическая интерпретация ML
+\end{itemize}
+\end{block}
+\smallskip
+\begin{alertblock}{Практика}
+\small Оперативная оценка ВРП для регионального планирования и МБТ
+\end{alertblock}
+\end{columns}
+\medskip
+\centering
+\textcolor{hseblue}{\large Спасибо за внимание!}
+\end{frame}
+
+
+\end{document}
