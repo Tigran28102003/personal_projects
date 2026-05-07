@@ -26,3 +26,4 @@ venv/
 *.json
 *.parquet
 *.xlsx
+disser_epta/.claude/
