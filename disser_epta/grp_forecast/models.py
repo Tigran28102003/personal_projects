@@ -587,6 +587,7 @@ class EmbMLPForecaster(BaseForecaster):
         batch_size: int = 128,
         patience: int = 20,
         weight_decay: float = 1e-4,
+        num_threads: int = 1,
         random_state: int = 42,
         missing_drop_threshold: float = DEFAULT_MISSING_DROP_THRESHOLD,
     ):
@@ -599,6 +600,7 @@ class EmbMLPForecaster(BaseForecaster):
             batch_size=batch_size,
             patience=patience,
             weight_decay=weight_decay,
+            num_threads=num_threads,
             random_state=random_state,
         )
         self.missing_drop_threshold = missing_drop_threshold
@@ -617,6 +619,7 @@ class EmbMLPForecaster(BaseForecaster):
             raise ImportError("PyTorch is required. Install with: pip install torch") from exc
 
         seed = int(self.params.get("random_state", 42))
+        torch.set_num_threads(int(self.params.get("num_threads", 1)))
         torch.manual_seed(seed)
         np.random.seed(seed)
 
@@ -849,12 +852,15 @@ def get_all_models(config: dict, predict_growth: bool = False) -> list[BaseForec
     emb_cfg = dict(models_config.get("emb_mlp", {}))
     for cfg in [ridge_cfg, lgbm_cfg, cat_cfg, gp_cfg, emb_cfg]:
         cfg.setdefault("missing_drop_threshold", missing_drop_threshold)
-    return [
+    models: list[BaseForecaster] = [
         NaiveForecaster(predict_growth=predict_growth),
         AR1Forecaster(),
         RidgeFEForecaster(**ridge_cfg),
         LGBMForecaster(**lgbm_cfg),
         CatBoostForecaster(**cat_cfg),
         GPBoostForecaster(**gp_cfg),
-        EmbMLPForecaster(**emb_cfg),
     ]
+    emb_enabled = bool(emb_cfg.pop("enabled", False))
+    if emb_enabled:
+        models.append(EmbMLPForecaster(**emb_cfg))
+    return models

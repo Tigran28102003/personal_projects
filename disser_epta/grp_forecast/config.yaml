@@ -48,13 +48,15 @@ models:
     inner_val_years: 2
     random_state: 42
   emb_mlp:
-    hidden_sizes: [128, 64]
-    dropout: 0.3
+    enabled: false
+    hidden_sizes: [32, 16]
+    dropout: 0.2
     lr: 0.001
-    max_epochs: 200
-    batch_size: 128
-    patience: 20
+    max_epochs: 50
+    batch_size: 2048
+    patience: 5
     weight_decay: 0.0001
+    num_threads: 1
     random_state: 42
 
 robustness:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import io
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -42,13 +45,26 @@ def run_cross_validation(
     tune: bool = True,
     n_trials: int = 50,
     save_predictions: bool = True,
+    clean_output: bool = True,
+    show_best: bool = True,
+    exclude_models: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> pd.DataFrame:
     processed_dir = Path("data/processed")
     os.makedirs(processed_dir, exist_ok=True)
 
+    excluded = set(exclude_models or [])
+    models = [model for model in models if model.name not in excluded]
+
     rows: list[dict] = []
     total = len(models) * len(folds)
-    progress = tqdm(total=total, desc="Cross-validation")
+    best_row: dict | None = None
+    progress = tqdm(
+        total=total,
+        desc="Cross-validation",
+        dynamic_ncols=True,
+        leave=True,
+        position=0,
+    )
     for fold in folds:
         X_train = fold["X_train"]
         y_train = fold["y_train"]
@@ -62,11 +78,13 @@ def run_cross_validation(
 
         for model_template in models:
             model = model_template.clone() if hasattr(model_template, "clone") else copy.deepcopy(model_template)
-            if tune and callable(getattr(model, "tune", None)):
-                model.tune(X_train, y_train, n_trials=n_trials)
-            else:
-                model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            progress.set_description(f"{model.name} | fold {fold['fold']}")
+            with _quiet_model_output(enabled=clean_output):
+                if tune and callable(getattr(model, "tune", None)):
+                    model.tune(X_train, y_train, n_trials=n_trials)
+                else:
+                    model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
             metrics = compute_metrics(y_test.to_numpy(), y_pred, y_bench)
             row = {
                 "model_name": model.name,
@@ -76,6 +94,17 @@ def run_cross_validation(
                 **metrics,
             }
             rows.append(row)
+            if best_row is None or row["RMSE"] < best_row["RMSE"]:
+                best_row = row
+            if show_best and best_row is not None:
+                progress.set_postfix_str(
+                    (
+                        f"best={best_row['model_name']} "
+                        f"fold={best_row['fold']} "
+                        f"RMSE={best_row['RMSE']:.4f}"
+                    ),
+                    refresh=False,
+                )
 
             if save_predictions:
                 pred_df = _prediction_frame(
@@ -92,6 +121,16 @@ def run_cross_validation(
                 )
             progress.update(1)
     progress.close()
+    if show_best and best_row is not None:
+        print(
+            "Best single fold: "
+            f"{best_row['model_name']} | "
+            f"fold={best_row['fold']} | "
+            f"test_year={best_row['test_year']} | "
+            f"RMSE={best_row['RMSE']:.4f} | "
+            f"MAE={best_row['MAE']:.4f} | "
+            f"OOS_R2={best_row['OOS_R2']:.4f}"
+        )
     return pd.DataFrame(rows)
 
 
@@ -106,6 +145,37 @@ def aggregate_results(cv_results: pd.DataFrame) -> pd.DataFrame:
         for col in agg.columns.to_flat_index()
     ]
     return agg.sort_values("RMSE_mean", ascending=True).reset_index(drop=True)
+
+
+@contextlib.contextmanager
+def _quiet_model_output(enabled: bool = True):
+    if not enabled:
+        yield
+        return
+    previous_optuna_verbosity = None
+    try:
+        import optuna
+
+        previous_optuna_verbosity = optuna.logging.get_verbosity()
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except Exception:
+        pass
+
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+                yield
+    finally:
+        if previous_optuna_verbosity is not None:
+            try:
+                import optuna
+
+                optuna.logging.set_verbosity(previous_optuna_verbosity)
+            except Exception:
+                pass
 
 
 def _prediction_frame(
