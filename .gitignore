@@ -27,4 +27,3 @@ venv/
 *.parquet
 *.xlsx
 disser_epta/.claude/
-disser_epta/
