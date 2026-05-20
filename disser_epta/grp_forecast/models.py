@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -215,7 +216,7 @@ class RidgeFEForecaster(BaseForecaster):
         missing_drop_threshold: float = DEFAULT_MISSING_DROP_THRESHOLD,
     ):
         super().__init__(
-            lambda_grid=lambda_grid or [0.01, 0.1, 1, 10, 100, 1000],
+            lambda_grid=lambda_grid or [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000, 5000],
             inner_val_years=inner_val_years,
             random_state=random_state,
             missing_drop_threshold=missing_drop_threshold,
@@ -296,9 +297,14 @@ class LGBMForecaster(BaseForecaster):
             "num_leaves": 31,
             "min_child_samples": 10,
             "subsample": 0.8,
+            "subsample_freq": 1,
             "colsample_bytree": 0.8,
+            "min_split_gain": 0.0,
+            "max_bin": 255,
             "reg_alpha": 0.1,
             "reg_lambda": 1.0,
+            "extra_trees": False,
+            "path_smooth": 0.0,
             "random_state": 42,
             "verbose": -1,
         }
@@ -345,24 +351,35 @@ class LGBMForecaster(BaseForecaster):
         y_inner = y_train.loc[train_mask].astype(float)
         y_val = y_train.loc[val_mask].astype(float)
 
-        # Число деревьев внутри пробы намеренно сокращено (100 вместо 300):
-        # это ускоряет каждый trial в ~3x, практически не влияя на ранжирование
-        # конфигураций. После поиска финальный fit выполняется с полным n_estimators.
-        _TRIAL_N_ESTIMATORS = 100
+        _TRIAL_N_ESTIMATORS = 150
 
         def objective(trial: optuna.Trial) -> float:
+            max_depth = trial.suggest_int("max_depth", 3, 10)
+            # num_leaves <= 2^max_depth - 1 предотвращает переобучение;
+            # нижняя граница тоже ограничена max_leaves, иначе Optuna падает
+            # при малых max_depth (напр. max_depth=3 → max_leaves=7 < 15).
+            max_leaves = min(255, 2 ** max_depth - 1)
+            min_leaves = min(15, max_leaves)
             params = dict(self.params)
             params.update(
                 {
                     "n_estimators": _TRIAL_N_ESTIMATORS,
                     "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-                    "max_depth": trial.suggest_int("max_depth", 3, 8),
-                    "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+                    "max_depth": max_depth,
+                    "num_leaves": trial.suggest_int("num_leaves", min_leaves, max_leaves),
                     "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
                     "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                    "subsample_freq": 1,
                     "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                    "min_split_gain": trial.suggest_float("min_split_gain", 0.0, 0.5),
+                    "max_bin": trial.suggest_int("max_bin", 64, 512, log=True),
                     "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10, log=True),
                     "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10, log=True),
+                    "extra_trees": trial.suggest_categorical("extra_trees", [True, False]),
+                    "path_smooth": trial.suggest_float("path_smooth", 0.0, 1.0),
+                    "min_sum_hessian_in_leaf": trial.suggest_float(
+                        "min_sum_hessian_in_leaf", 1e-3, 10, log=True
+                    ),
                     "n_jobs": -1,
                     "verbose": -1,
                 }
@@ -393,6 +410,11 @@ class CatBoostForecaster(BaseForecaster):
             "learning_rate": 0.05,
             "depth": 6,
             "l2_leaf_reg": 3,
+            "min_data_in_leaf": 5,
+            "border_count": 128,
+            "bootstrap_type": "Bayesian",
+            "colsample_bylevel": 1.0,
+            "leaf_estimation_iterations": 1,
             "random_seed": 42,
             "verbose": 0,
             "allow_writing_files": False,
@@ -443,11 +465,12 @@ class CatBoostForecaster(BaseForecaster):
         y_inner = y_train.loc[train_mask].astype(float)
         y_val = y_train.loc[val_mask].astype(float)
 
-        # Урезаем число итераций внутри проб (~3x быстрее).
-        # Финальный fit после поиска использует полное self.params["iterations"].
-        _TRIAL_ITERATIONS = 150
+        _TRIAL_ITERATIONS = 250
 
         def objective(trial: optuna.Trial) -> float:
+            bootstrap_type = trial.suggest_categorical(
+                "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
+            )
             params = dict(self.params)
             params.update(
                 {
@@ -455,10 +478,27 @@ class CatBoostForecaster(BaseForecaster):
                     "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
                     "depth": trial.suggest_int("depth", 4, 10),
                     "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1, 20, log=True),
-                    "bagging_temperature": trial.suggest_float("bagging_temperature", 0, 1),
+                    "bootstrap_type": bootstrap_type,
                     "random_strength": trial.suggest_float("random_strength", 0, 10),
+                    "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 1, 20),
+                    "border_count": trial.suggest_int("border_count", 32, 255),
+                    "grow_policy": trial.suggest_categorical(
+                        "grow_policy", ["SymmetricTree", "Depthwise"]
+                    ),
+                    "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.5, 1.0),
+                    "leaf_estimation_iterations": trial.suggest_int(
+                        "leaf_estimation_iterations", 1, 10
+                    ),
                 }
             )
+            # bagging_temperature — специфично для bootstrap_type="Bayesian"
+            # subsample — специфично для "Bernoulli"
+            if bootstrap_type == "Bayesian":
+                params["bagging_temperature"] = trial.suggest_float(
+                    "bagging_temperature", 0.0, 1.0
+                )
+            elif bootstrap_type == "Bernoulli":
+                params["subsample"] = trial.suggest_float("subsample", 0.5, 1.0)
             model = CatBoostRegressor(**params)
             model.fit(X_inner, y_inner, cat_features=cat_features)
             pred = model.predict(X_val)
@@ -474,6 +514,50 @@ class CatBoostForecaster(BaseForecaster):
         return None
 
 
+class WeightedEnsembleForecaster(BaseForecaster):
+    """
+    Взвешенное среднее CatBoostForecaster и LGBMForecaster.
+
+    Параметр catboost_weight ∈ [0, 1] — вес предсказаний CatBoost.
+    LGBMForecaster получает вес (1 - catboost_weight).
+
+    Обе подмодели обучаются/тюнятся независимо через свои стандартные методы.
+    Оптимальный вес рекомендуется находить вне класса: sweep по сохранённым parquet-
+    предсказаниям без переобучения (см. notebook-ячейку "Ensemble weight search").
+
+    Имя модели в CV-таблице: "Ensemble(CB×w+LGB×{1-w})".
+    """
+
+    def __init__(self, catboost_weight: float = 0.6, **common_params):
+        self.catboost_weight = float(catboost_weight)
+        # Выделяем only missing_drop_threshold как общий параметр
+        mdt = float(common_params.pop("missing_drop_threshold", DEFAULT_MISSING_DROP_THRESHOLD))
+        super().__init__(catboost_weight=self.catboost_weight,
+                         missing_drop_threshold=mdt, **common_params)
+        self._catboost = CatBoostForecaster(missing_drop_threshold=mdt)
+        self._lgbm = LGBMForecaster(missing_drop_threshold=mdt)
+        w_cat = round(self.catboost_weight, 2)
+        w_lgb = round(1.0 - self.catboost_weight, 2)
+        self.name = f"Ensemble(CB×{w_cat}+LGB×{w_lgb})"
+
+    def fit(self, X_train: pd.DataFrame, y_train: pd.Series) -> None:
+        self._catboost.fit(X_train, y_train)
+        self._lgbm.fit(X_train, y_train)
+
+    def predict(self, X_test: pd.DataFrame) -> np.ndarray:
+        w = self.catboost_weight
+        return (w * self._catboost.predict(X_test)
+                + (1.0 - w) * self._lgbm.predict(X_test))
+
+    def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> None:
+        # Тюнинг каждой подмодели независимо; вес задан снаружи (через grid search)
+        self._catboost.tune(X_train, y_train, n_trials=n_trials)
+        self._lgbm.tune(X_train, y_train, n_trials=n_trials)
+
+    def clone(self) -> "WeightedEnsembleForecaster":
+        return copy.deepcopy(self)
+
+
 class GPBoostForecaster(BaseForecaster):
     def __init__(self, group_col: str = "region_id", **params):
         self.missing_drop_threshold = float(
@@ -484,6 +568,15 @@ class GPBoostForecaster(BaseForecaster):
             "learning_rate": 0.05,
             "max_depth": 5,
             "num_leaves": 31,
+            "feature_fraction": 0.8,
+            "min_data_in_leaf": 10,
+            "reg_lambda": 0.1,
+            "lambda_l1": 0.0,
+            # bagging_fraction / bagging_freq omitted:
+            # gpb.train(..., gp_model=...) raises GPBoostError when bagging_freq > 0.
+            # Bagging is incompatible with the GP random-effects component.
+            "min_gain_to_split": 0.0,
+            "cov_function": "matern3_2",
             "verbose_eval": False,
             "random_state": 42,
         }
@@ -494,6 +587,8 @@ class GPBoostForecaster(BaseForecaster):
         self.gp_model_ = None
         self.feature_columns_: list[str] = []
         self.preprocessor_: dict | None = None
+        self.train_mean_: float = 0.0   # safe fallback value; set in fit()
+        self.train_std_: float = 1.0    # used for clipping in GPBoostWithGP
 
     def fit(self, X_train: pd.DataFrame, y_train: pd.Series) -> None:
         import gpboost as gpb
@@ -506,7 +601,15 @@ class GPBoostForecaster(BaseForecaster):
             missing_drop_threshold=self.missing_drop_threshold,
         )
         self.feature_columns_ = X_fit.columns.tolist()
-        self.gp_model_ = gpb.GPModel(group_data=group_data, likelihood="gaussian")
+        y_float = y_train.astype(float)
+        self.train_mean_ = float(y_float.mean())
+        _std = float(y_float.std(ddof=1))
+        self.train_std_ = _std if _std > 1e-9 else 1.0
+        self.gp_model_ = gpb.GPModel(
+            group_data=group_data,
+            likelihood="gaussian",
+            cov_function=str(self.params.get("cov_function", "matern3_2")),
+        )
         train_set = gpb.Dataset(X_fit, label=y_train.astype(float).to_numpy())
         params = {
             "objective": "regression_l2",
@@ -514,6 +617,12 @@ class GPBoostForecaster(BaseForecaster):
             "learning_rate": self.params["learning_rate"],
             "max_depth": self.params["max_depth"],
             "num_leaves": self.params["num_leaves"],
+            "feature_fraction": float(self.params.get("feature_fraction", 0.8)),
+            "min_data_in_leaf": int(self.params.get("min_data_in_leaf", 10)),
+            "lambda_l2": float(self.params.get("reg_lambda", 0.1)),
+            "lambda_l1": float(self.params.get("lambda_l1", 0.0)),
+            # bagging_fraction / bagging_freq NOT passed — incompatible with gp_model
+            "min_gain_to_split": float(self.params.get("min_gain_to_split", 0.0)),
             "verbose": -1,
             "seed": int(self.params.get("random_state", 42)),
         }
@@ -532,20 +641,22 @@ class GPBoostForecaster(BaseForecaster):
         if self.preprocessor_ is None:
             raise RuntimeError("GPBoostForecaster preprocessor is not fitted.")
         X_pred = _transform_numeric_preprocessor(X_test, self.preprocessor_)
-        # Variant 4: use fixed-effects only (ignore_gp_model=True) for stable OOS prediction.
-        # GP random effects in new time periods cause large extrapolation errors in level space.
+        # Fixed-effects only: GP random effects extrapolate poorly to unseen time periods
+        # and can cause catastrophic spikes in early folds with small training sets.
+        # If the API call fails (e.g. GPBoost version change), fall back to training mean
+        # rather than activating the GP component, which is the dangerous path.
         try:
             pred = self.booster_.predict(data=X_pred, ignore_gp_model=True)
-        except Exception:
-            try:
-                group_data_pred = X_test[self.group_col].astype(str).to_numpy()
-                pred = self.booster_.predict(
-                    data=X_pred,
-                    group_data_pred=group_data_pred,
-                    predict_var=False,
-                )
-            except Exception:
-                pred = self.booster_.predict(X_pred)
+        except Exception as exc:
+            warnings.warn(
+                f"GPBoostForecaster: booster_.predict(ignore_gp_model=True) raised "
+                f"{type(exc).__name__}: {exc}. "
+                f"Returning training mean ({self.train_mean_:.5f}) as safe fallback. "
+                f"Check GPBoost version compatibility.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return np.full(len(X_test), self.train_mean_, dtype=float)
         return self._extract_pred_mean(pred)
 
     def tune(self, X_train: pd.DataFrame, y_train: pd.Series, n_trials: int = 20) -> None:
@@ -561,12 +672,20 @@ class GPBoostForecaster(BaseForecaster):
         _TRIAL_ROUNDS = 100
 
         def objective(trial: optuna.Trial) -> float:
+            # NOTE: bagging_fraction / bagging_freq are NOT tuned —
+            # gpb.train() raises GPBoostError when bagging_freq > 0 with gp_model.
             trial_model = GPBoostForecaster(
                 group_col=self.group_col,
                 learning_rate=trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
                 max_depth=trial.suggest_int("max_depth", 3, 7),
                 num_leaves=trial.suggest_int("num_leaves", 15, 63),
-                num_boost_round=_TRIAL_ROUNDS,   # фиксировано для скорости
+                feature_fraction=trial.suggest_float("feature_fraction", 0.6, 1.0),
+                min_data_in_leaf=trial.suggest_int("min_data_in_leaf", 5, 30),
+                reg_lambda=trial.suggest_float("reg_lambda", 1e-3, 10, log=True),
+                lambda_l1=trial.suggest_float("lambda_l1", 0.0, 5.0),
+                min_gain_to_split=trial.suggest_float("min_gain_to_split", 0.0, 0.5),
+                cov_function=trial.suggest_categorical("cov_function", ["gaussian", "matern3_2"]),
+                num_boost_round=_TRIAL_ROUNDS,
                 missing_drop_threshold=self.missing_drop_threshold,
                 random_state=int(self.params.get("random_state", 42)),
                 verbose_eval=False,
@@ -895,7 +1014,8 @@ def get_all_models(config: dict, predict_growth: bool = False) -> list[BaseForec
     cat_cfg = dict(models_config.get("catboost", {}))
     gp_cfg = dict(models_config.get("gpboost", {}))
     emb_cfg = dict(models_config.get("emb_mlp", {}))
-    for cfg in [ridge_cfg, lgbm_cfg, cat_cfg, gp_cfg, emb_cfg]:
+    ens_cfg = dict(models_config.get("ensemble", {}))
+    for cfg in [ridge_cfg, lgbm_cfg, cat_cfg, gp_cfg, emb_cfg, ens_cfg]:
         cfg.setdefault("missing_drop_threshold", missing_drop_threshold)
     models: list[BaseForecaster] = [
         NaiveForecaster(predict_growth=predict_growth),
@@ -903,6 +1023,7 @@ def get_all_models(config: dict, predict_growth: bool = False) -> list[BaseForec
         RidgeFEForecaster(**ridge_cfg),
         LGBMForecaster(**lgbm_cfg),
         CatBoostForecaster(**cat_cfg),
+        WeightedEnsembleForecaster(**ens_cfg),
         GPBoostForecaster(**gp_cfg),
     ]
     emb_enabled = bool(emb_cfg.pop("enabled", False))

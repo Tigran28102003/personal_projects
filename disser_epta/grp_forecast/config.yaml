@@ -14,8 +14,11 @@ validation:
   predict_growth: true
 
 tuning:
-  n_trials: 20          # 20 trials TPE достаточно для 6-8 параметров; финальный fit — полный
+  n_trials: 60
   inner_val_years: 2
+  trial_n_estimators_lgbm: 150
+  trial_iterations_catboost: 250
+  trial_boost_rounds_gpboost: 200   # ранее захардкожено; теперь вынесено в конфиг
 
 models:
   missing_drop_threshold: 0.4
@@ -26,15 +29,25 @@ models:
     num_leaves: 31
     min_child_samples: 10
     subsample: 0.8
+    subsample_freq: 1          # активирует row subsampling; без этого subsample игнорируется
     colsample_bytree: 0.8
+    min_split_gain: 0.0
+    max_bin: 255
     reg_alpha: 0.1
     reg_lambda: 1.0
+    extra_trees: false          # extremely randomized trees; tuned
+    path_smooth: 0.0            # smooths leaf values along tree path; tuned
     random_state: 42
   catboost:
     iterations: 500
     learning_rate: 0.05
     depth: 6
     l2_leaf_reg: 3
+    min_data_in_leaf: 5
+    border_count: 128
+    bootstrap_type: "Bayesian"  # Bayesian | Bernoulli (subsample) | MVS; tuned
+    colsample_bylevel: 1.0      # feature fraction per tree level; tuned
+    leaf_estimation_iterations: 1  # Newton steps per leaf; tuned
     random_seed: 42
     verbose: 0
   gpboost:
@@ -42,19 +55,28 @@ models:
     learning_rate: 0.05
     max_depth: 5
     num_leaves: 31
+    feature_fraction: 0.8
+    min_data_in_leaf: 10
+    reg_lambda: 0.1
+    lambda_l1: 0.0              # L1 regularization; tuned
+    # bagging_fraction / bagging_freq removed: gpboost forbids bagging with gp_model
+    min_gain_to_split: 0.0      # minimum loss gain to split; tuned
+    cov_function: "matern3_2"
     random_state: 42
+  ensemble:
+    catboost_weight: 0.6        # overridden by weight grid search in notebook
   ridge:
-    lambda_grid: [0.01, 0.1, 1, 10, 100, 1000]
+    lambda_grid: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000, 5000]
     inner_val_years: 2
     random_state: 42
   emb_mlp:
-    enabled: false
+    enabled: true
     hidden_sizes: [32, 16]
     dropout: 0.2
     lr: 0.001
-    max_epochs: 50
-    batch_size: 2048
-    patience: 5
+    max_epochs: 200
+    batch_size: 256
+    patience: 15
     weight_decay: 0.0001
     num_threads: 1
     random_state: 42

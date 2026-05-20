@@ -269,6 +269,91 @@ def plot_error_heatmap(error_dict: dict) -> Figure:
     return fig
 
 
+def plot_ensemble_weight_search(
+    weights: "np.ndarray",
+    rmse_by_w: list[float],
+    best_w: float,
+) -> Figure:
+    """Кривая RMSE ensemble в зависимости от веса CatBoost (sweep 0→1)."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(weights, rmse_by_w, "o-", color="#4c78a8", linewidth=2, markersize=5)
+    best_rmse = min(rmse_by_w)
+    ax.axvline(best_w, color="red", linestyle="--", linewidth=1.5,
+               label=f"opt. w={best_w:.2f}  RMSE={best_rmse:.4f}")
+    # горизонтальная линия: RMSE чистого CatBoost (w=1.0)
+    ax.axhline(rmse_by_w[-1] if len(rmse_by_w) == len(weights) else float("nan"),
+               color="orange", linestyle=":", linewidth=1.2, label="CatBoost only (w=1)")
+    ax.set_xlabel("Вес CatBoost  (вес LGBM = 1 − w)")
+    ax.set_ylabel("Среднее RMSE по фолдам")
+    ax.set_title("Поиск оптимального веса ансамбля: CatBoost + LGBM")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
+def plot_ruble_metrics_table(ruble_df: "pd.DataFrame") -> Figure:
+    """
+    Таблица метрик в рублях (RMSE млрд руб, MAE млрд руб, MAPE %).
+    ruble_df должен содержать колонки: model, RMSE_bln_rub, MAE_bln_rub, MAPE_pct.
+    """
+    df = ruble_df.sort_values("RMSE_bln_rub").reset_index(drop=True)
+    rows = []
+    for _, row in df.iterrows():
+        rows.append([
+            row["model"],
+            f"{row['RMSE_bln_rub']:.2f}",
+            f"{row['MAE_bln_rub']:.2f}",
+            f"{row['MAPE_pct']:.2f}%",
+        ])
+
+    fig, ax = plt.subplots(figsize=(10, 0.7 * len(rows) + 1.8))
+    ax.axis("off")
+    table = ax.table(
+        cellText=rows,
+        colLabels=["Модель", "RMSE (млн руб.)", "MAE (млн. руб.)", "MAPE (%)"],
+        cellLoc="center",
+        colLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
+    for col_idx in range(4):
+        table[(0, col_idx)].set_facecolor("#d9e2ec")
+        table[(0, col_idx)].set_text_props(weight="bold")
+    if not df.empty:
+        best_col = {1: int(df["RMSE_bln_rub"].idxmin()),
+                    2: int(df["MAE_bln_rub"].idxmin()),
+                    3: int(df["MAPE_pct"].idxmin())}
+        for col_idx, df_idx in best_col.items():
+            table[(df.index.get_loc(df_idx) + 1, col_idx)].set_facecolor("#c6f6d5")
+    fig.tight_layout()
+    return fig
+
+
+def plot_mape_by_model(ruble_df: "pd.DataFrame") -> Figure:
+    """
+    Горизонтальный bar chart: MAPE (%) по моделям.
+    Вертикальная линия = MAPE NaiveForecaster.
+    """
+    df = ruble_df.sort_values("MAPE_pct", ascending=True).reset_index(drop=True)
+    naive_mape = df.loc[df["model"].str.contains("Naive", case=False), "MAPE_pct"]
+    naive_val = float(naive_mape.iloc[0]) if not naive_mape.empty else None
+
+    fig, ax = plt.subplots(figsize=(9, max(4, 0.35 * len(df))))
+    colors = ["#c6f6d5" if v <= (naive_val or float("inf")) else "#fed7d7"
+              for v in df["MAPE_pct"]]
+    ax.barh(df["model"], df["MAPE_pct"], color=colors)
+    if naive_val is not None:
+        ax.axvline(naive_val, color="black", linestyle="--", linewidth=1.5,
+                   label=f"Naive MAPE={naive_val:.2f}%")
+    ax.set_xlabel("MAPE (%)")
+    ax.set_title("Средняя абсолютная процентная ошибка прогноза ВРП")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
 def _base_values_for_plot(shap_dict: dict, n_rows: int) -> np.ndarray:
     base_values = np.asarray(shap_dict.get("base_values", np.zeros(n_rows)))
     if base_values.ndim == 0:

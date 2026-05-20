@@ -200,6 +200,14 @@ def _prediction_frame(
     else:
         year = np.array([fold["test_year"]] * len(X_test))
 
+    # log_grp_lag1 нужен для обратного преобразования в рубли:
+    # GRP_t = exp(log_grp_lag1 + y_pred) — в тех же единицах, что и исходный ВРП
+    log_grp_lag1 = (
+        X_test["log_grp_lag1"].astype(float).to_numpy()
+        if "log_grp_lag1" in X_test.columns
+        else np.full(len(X_test), np.nan)
+    )
+
     return pd.DataFrame(
         {
             "model_name": model_name,
@@ -210,5 +218,6 @@ def _prediction_frame(
             "y_true": y_true.astype(float).to_numpy(),
             "y_pred": np.asarray(y_pred, dtype=float),
             "y_bench": np.asarray(y_bench, dtype=float),
+            "log_grp_lag1": log_grp_lag1,   # для back-transform в рубли
         }
     ).assign(abs_error=lambda df: (df["y_true"] - df["y_pred"]).abs())
