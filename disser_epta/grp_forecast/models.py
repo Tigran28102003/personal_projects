@@ -528,7 +528,7 @@ class WeightedEnsembleForecaster(BaseForecaster):
     Имя модели в CV-таблице: "Ensemble(CB×w+LGB×{1-w})".
     """
 
-    def __init__(self, catboost_weight: float = 0.6, **common_params):
+    def __init__(self, catboost_weight: float = 0.25, **common_params):
         self.catboost_weight = float(catboost_weight)
         # Выделяем only missing_drop_threshold как общий параметр
         mdt = float(common_params.pop("missing_drop_threshold", DEFAULT_MISSING_DROP_THRESHOLD))

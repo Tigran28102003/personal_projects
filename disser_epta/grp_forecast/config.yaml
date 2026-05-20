@@ -64,7 +64,7 @@ models:
     cov_function: "matern3_2"
     random_state: 42
   ensemble:
-    catboost_weight: 0.6        # overridden by weight grid search in notebook
+    catboost_weight: 0.25       # optimal weight found by grid search (see notebook section 11)
   ridge:
     lambda_grid: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000, 5000]
     inner_val_years: 2

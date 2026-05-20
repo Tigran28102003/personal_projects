@@ -247,6 +247,7 @@ $$\text{OOS-}R^2 = 1 - \frac{\sum(y_i-\hat{y}_i)^2}{\sum(y_i-\bar{y}_{\text{trai
 \begin{itemize}\setlength\itemsep{4pt}
   \item \textbf{LGBM} — LightGBM, gradient boosting на деревьях
   \item \textbf{CatBoost} — Yandex, нативная обработка категориальных признаков
+  \item \textbf{Ensemble} — взвешенный ансамбль CB$\times$0.6 + LGB$\times$0.4
   \item \textbf{GPBoost} — комбинация GB + гауссовые процессы, учёт случайных эффектов регионов
 \end{itemize}
 \medskip
@@ -275,19 +276,19 @@ $$\text{OOS-}R^2 = 1 - \frac{\sum(y_i-\hat{y}_i)^2}{\sum(y_i-\bar{y}_{\text{trai
 
 % ------ Слайд 8: Основные результаты — таблица -------------------
 \begin{frame}{Основные результаты: сводная таблица метрик}
-\vspace{-6pt}
+\vspace{-8pt}
 \begin{center}
-\includegraphics[width=0.92\textwidth,trim=0 30 0 30,clip]{grp_forecast/figures/metrics_table.png}
+\includegraphics[width=0.88\textwidth,height=0.76\textheight,keepaspectratio,trim=0 30 0 30,clip]{../grp_forecast/figures/metrics_table.png}
 \end{center}
-\vspace{-2pt}
-\centering\small Зелёным — лучшее значение. OOS-$R^2>0$: модель превосходит наивный бенчмарк.
+\vspace{-4pt}
+\centering\scriptsize Зелёным — лучшее значение. OOS-$R^2>0$: модель превосходит наивный бенчмарк.
 \end{frame}
 
 
 % ------ Слайд 9: Динамика RMSE по фолдам -------------------------
 \begin{frame}{Динамика RMSE по годам прогноза}
 \begin{center}
-\includegraphics[width=0.90\textwidth]{grp_forecast/figures/rmse_over_time.png}
+\includegraphics[width=0.90\textwidth]{../grp_forecast/figures/rmse_over_time.png}
 \end{center}
 \vspace{-4pt}
 \small
@@ -302,11 +303,11 @@ $$\text{OOS-}R^2 = 1 - \frac{\sum(y_i-\hat{y}_i)^2}{\sum(y_i-\bar{y}_{\text{trai
 \column{0.50\textwidth}
 \centering
 \textbf{Топ-20 регионов по MAE}\\[4pt]
-\includegraphics[width=\textwidth]{grp_forecast/figures/error_by_region.png}
+\includegraphics[width=\textwidth]{../grp_forecast/figures/error_by_region.png}
 \column{0.48\textwidth}
 \centering
 \textbf{Тепловая карта ошибок (регион × год)}\\[4pt]
-\includegraphics[width=\textwidth]{grp_forecast/figures/error_heatmap.png}
+\includegraphics[width=\textwidth]{../grp_forecast/figures/error_heatmap.png}
 \end{columns}
 \vspace{2pt}
 \small Наибольшие ошибки — в ресурсодобывающих регионах (ЯНАО, Сахалин) и в периоды структурных шоков.
@@ -319,36 +320,36 @@ $$\text{OOS-}R^2 = 1 - \frac{\sum(y_i-\hat{y}_i)^2}{\sum(y_i-\bar{y}_{\text{trai
 \column{0.49\textwidth}
 \centering
 \textbf{Средний |SHAP|}\\[4pt]
-\includegraphics[width=\textwidth,height=5.2cm,keepaspectratio]{grp_forecast/figures/shap_global.png}
+\includegraphics[width=\textwidth,height=5.2cm,keepaspectratio]{../grp_forecast/figures/shap_global.png}
 \column{0.49\textwidth}
 \centering
 \textbf{Beeswarm (направление эффекта)}\\[4pt]
-\includegraphics[width=\textwidth,height=5.2cm,keepaspectratio]{grp_forecast/figures/shap_beeswarm.png}
+\includegraphics[width=\textwidth,height=5.2cm,keepaspectratio]{../grp_forecast/figures/shap_beeswarm.png}
 \end{columns}
 \vspace{2pt}
-\small Доминирует AR-компонента; инвестиции и доходы — второй блок. Beeswarm подтверждает ожидаемые знаки эффектов.
+\small \textbf{\#1:} волатильность USD/RUB (\texttt{usd\_rub\_volatility\_lag1}), отрыв вдвое от следующего. Далее: стоимость прод.~корзины, ключевая ставка (ном.~и~реал.), доля платных услуг. MACRO\_BLOCK и PRICE\_BLOCK доминируют над отраслевыми показателями.
 \end{frame}
 
 
 % ------ Слайд 12: SHAP групповой ----------------------------------
 \begin{frame}{SHAP: блоки признаков по типам регионов}
 \begin{center}
-\includegraphics[width=0.80\textwidth]{grp_forecast/figures/shap_group_heatmap.png}
+\includegraphics[width=0.80\textwidth]{../grp_forecast/figures/shap_group_heatmap.png}
 \end{center}
 \vspace{-4pt}
 \small
-Тепловая карта показывает, что для ресурсодобывающих регионов важнее отраслевые и инвестиционные признаки,
-а для регионов-лидеров сервисной экономики (Москва, СПб) — потребительские и бюджетные блоки.
+MACRO\_BLOCK (0.21--0.27) и PRICE\_BLOCK (0.16--0.21) доминируют во всех типах регионов.
+PRODUCTION\_BLOCK сильнее для сырьевых (0.17 vs 0.08--0.11). CATEGORICAL\_BLOCK~=~0 везде~--- тип региона не добавляет предсказательной силы сверх количественных признаков.
 \end{frame}
 
 
 % ------ Слайд 13: Аблационный анализ ------------------------------
 \begin{frame}{Аблационный анализ блоков признаков}
 \begin{center}
-\includegraphics[width=0.74\textwidth]{grp_forecast/figures/ablation_study.png}
+\includegraphics[width=0.74\textwidth]{../grp_forecast/figures/ablation_study.png}
 \end{center}
 \vspace{-2pt}
-\small A0 — полный набор. Удаление AR-лагов (A1) и инвестиций (A2) даёт наибольший рост RMSE.
+\small A0 — только лаги ВРП; A3 — полный набор признаков. Добавление производственного блока (A0→A1) даёт заметное улучшение. Остальные блоки (A1→A3) вносят меньший вклад для LightGBM. Пунктир — наивный прогноз.
 \end{frame}
 
 
@@ -358,13 +359,13 @@ $$\text{OOS-}R^2 = 1 - \frac{\sum(y_i-\hat{y}_i)^2}{\sum(y_i-\bar{y}_{\text{trai
 \column{0.49\textwidth}
 \centering
 \textbf{Исключение структурных выбросов}\\[4pt]
-\includegraphics[width=\textwidth]{grp_forecast/figures/rc1_outliers.png}
+\includegraphics[width=\textwidth]{../grp_forecast/figures/rc1_outliers.png}
 \small\\
 Полная выборка vs. без Москвы, ХМАО, ЯНАО, Сахалина
 \column{0.49\textwidth}
 \centering
 \textbf{Кризисные vs. обычные периоды}\\[4pt]
-\includegraphics[width=\textwidth]{grp_forecast/figures/rc2_crisis.png}
+\includegraphics[width=\textwidth]{../grp_forecast/figures/rc2_crisis.png}
 \small\\
 RMSE на фолдах кризисных лет существенно выше
 \end{columns}
@@ -380,10 +381,11 @@ RMSE на фолдах кризисных лет существенно выше
 \column{0.55\textwidth}
 \textbf{Основные результаты:}
 \begin{itemize}\setlength\itemsep{4pt}\small
-  \item Лучшая модель (LGBM / CatBoost) превосходит наивный бенчмарк на всех 9 фолдах
-  \item OOS-$R^2 > 0$ — информативное прогнозирование подтверждено
-  \item AR-лаги и инвестиции — ключевые предикторы (SHAP + аблация)
-  \item Устойчивость к выбросам; ошибки растут в кризисные периоды
+  \item Лучшая модель: Ensemble(CB$\times$0.6+LGB$\times$0.4),
+        RMSE~=~0.0387 (-7.6\% от наивного), OOS-$R^2$~=~0.126
+  \item Одиночные: LGBM $\approx$ Ensemble; CatBoost~--- 3-й
+  \item Волатильность USD/RUB и ключевая ставка~--- топ предикторы (SHAP)
+  \item Устойчивость к выбросам; ошибки выше в кризисные периоды
 \end{itemize}
 \column{0.42\textwidth}
 \begin{block}{Научный вклад}
