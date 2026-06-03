@@ -1,0 +1,817 @@
+% ============================================================
+%  Презентация для защиты магистерской диссертации
+%  НИУ ВШЭ — Факультет компьютерных наук
+%  Автор: Семенюченко А. Г. | Науч. рук.: Паточенко Е. А.
+%  Тема: Прогнозирование ВРП регионов РФ (ансамблевые ML)
+%
+%  Компиляция: xelatex presentation_hse.tex
+%  (запустить дважды для корректного ToC и нумерации)
+% ============================================================
+
+\documentclass[aspectratio=169,12pt]{beamer}
+
+% ─── XeLaTeX + Russian ────────────────────────────────────────────────────────
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{russian}
+\setotherlanguage{english}
+
+% ── ШРИФТ ────────────────────────────────────────────────────────────────────
+% Раскомментируйте нужный вариант. По умолчанию — Helvetica Neue (macOS).
+% Вариант 1 (рекомендуется): HSE Sans — скачать с brand.hse.ru/fonts
+%\setmainfont{HSE Sans}
+%\setsansfont{HSE Sans}
+% Вариант 2: Helvetica Neue (macOS) — активен по умолчанию
+\setmainfont{Helvetica Neue}
+\setsansfont{Helvetica Neue}
+% Вариант 3: Lato (Linux / Windows, входит в TeXLive)
+% Если компилируете не на macOS — закомментируйте строки выше и раскомментируйте:
+%\setmainfont{Lato}
+%\setsansfont{Lato}
+% Моноширинный шрифт
+\setmonofont{Courier New}
+% Кириллические варианты для polyglossia (убирает предупреждения о Cyrillic script)
+\newfontfamily\cyrillicfontsf{Helvetica Neue}
+\newfontfamily\cyrillicfonttt{Courier New}
+
+% ─── Пакеты ──────────────────────────────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning, shapes.geometric, calc}
+\usepackage{amsmath, amssymb}
+\usepackage{array}
+\usepackage{colortbl}
+\usepackage{tabularx}
+\usepackage{microtype}
+
+% ─── Цвета брендбука ВШЭ (цифровая палитра) ─────────────────────────────────
+\definecolor{hsedark}{RGB}{15,45,105}       % Основной тёмно-синий (Pantone 287)
+\definecolor{hseblue}{RGB}{35,75,155}       % Дополнительный синий (Pantone 2728)
+\definecolor{hsegray}{RGB}{230,230,230}     % Светло-серый (K=10)
+\definecolor{hsemidgray}{RGB}{191,191,191}  % Серый (K=25)
+\definecolor{hsedarkgray}{RGB}{128,128,128} % Тёмно-серый (K=50)
+\definecolor{hsegreen}{RGB}{0,155,100}      % Зелёный акцент
+\definecolor{hseorange}{RGB}{235,105,30}    % Оранжевый акцент
+\definecolor{hsetablehl}{RGB}{205,220,240}  % Подсветка строк таблицы
+
+% ─── Beamer: цвета ───────────────────────────────────────────────────────────
+\setbeamercolor{structure}{fg=hsedark}
+\setbeamercolor{background canvas}{bg=white}
+\setbeamercolor{frametitle}{fg=white, bg=hsedark}
+\setbeamercolor{title}{fg=hsedark}
+\setbeamercolor{subtitle}{fg=hseblue}
+\setbeamercolor{author}{fg=hsedark}
+\setbeamercolor{date}{fg=hsedark}
+\setbeamercolor{normal text}{fg=black}
+\setbeamercolor{block title}{fg=white, bg=hsedark}
+\setbeamercolor{block body}{fg=black, bg=hsegray}
+\setbeamercolor{block title alerted}{fg=white, bg=hseblue}
+\setbeamercolor{block body alerted}{fg=black, bg=hseblue!10}
+\setbeamercolor{alerted text}{fg=hseblue}
+\setbeamercolor{example text}{fg=hsegreen!70!black}
+\setbeamercolor{itemize item}{fg=hsedark}
+\setbeamercolor{itemize subitem}{fg=hseblue}
+\setbeamercolor{enumerate item}{fg=hsedark}
+\setbeamercolor{footline}{bg=hsedark}
+
+% ─── Beamer: шрифты ──────────────────────────────────────────────────────────
+\setbeamerfont{frametitle}{size=\large, series=\bfseries}
+\setbeamerfont{title}{size=\Large, series=\bfseries}
+\setbeamerfont{subtitle}{size=\normalsize}
+\setbeamerfont{author}{size=\normalsize}
+\setbeamerfont{date}{size=\small}
+\setbeamerfont{footline}{size=\tiny}
+\setbeamerfont{block title}{size=\normalsize, series=\bfseries}
+\setbeamerfont{section in toc}{series=\bfseries}
+
+% ─── Убираем навигацию ───────────────────────────────────────────────────────
+\setbeamertemplate{navigation symbols}{}
+
+% ─── Маркеры списков ─────────────────────────────────────────────────────────
+\setbeamertemplate{itemize item}{%
+  \tikz\fill[hsedark] (0,0) -- (0.2em,0.35em) -- (-0.2em,0.35em) -- cycle;}
+\setbeamertemplate{itemize subitem}{%
+  \tikz\fill[hseblue] (0,0) rectangle (0.35em,0.35em);}
+\setbeamertemplate{itemize subsubitem}{%
+  \tikz\fill[hsedarkgray] circle (0.18em);}
+\setbeamertemplate{enumerate item}{%
+  \textbf{\color{hsedark}\insertenumlabel.}}
+
+% ─── Заголовок слайда ────────────────────────────────────────────────────────
+\setbeamertemplate{frametitle}{%
+  \vspace{-0.02cm}%
+  \begin{beamercolorbox}[%
+      wd=\paperwidth,%
+      ht=0.85cm,%
+      dp=0.25cm,%
+      leftskip=0.60cm,%
+      rightskip=0.40cm]{frametitle}%
+    \usebeamerfont{frametitle}%
+    \usebeamercolor[fg]{frametitle}%
+    \insertframetitle%
+  \end{beamercolorbox}%
+}
+
+% ─── Нижний колонтитул ───────────────────────────────────────────────────────
+% Beamer автоматически скрывает колонтитул на [plain]-слайдах
+\setbeamertemplate{footline}{%
+  \begin{beamercolorbox}[%
+      wd=\paperwidth,%
+      ht=0.50cm,%
+      dp=0.18cm,%
+      leftskip=0.40cm,%
+      rightskip=0.40cm]{footline}%
+    {\color{white}\tiny
+      НИУ «Высшая школа экономики» \textbar{} ФКН \textbar{} ОП «Анализ больших данных»}%
+    \hfill
+    {\color{white}\tiny
+      Семенюченко~А.\,Г. \quad\textbar\quad Прогнозирование ВРП субъектов РФ}%
+    \hfill
+    {\color{white}\tiny \insertframenumber\,/\,\inserttotalframenumber\hspace{0.3cm}}%
+  \end{beamercolorbox}%
+}
+
+% ─── Верхняя полоска (тонкая) ────────────────────────────────────────────────
+\makeatletter
+\setbeamertemplate{headline}{%
+  \ifbeamer@plainframe\else%
+  \begin{beamercolorbox}[wd=\paperwidth,ht=0.04cm,dp=0pt]{footline}%
+  \end{beamercolorbox}%
+  \fi%
+}
+\makeatother
+
+% ─── Путь к изображениям ─────────────────────────────────────────────────────
+\graphicspath{%
+  {/Users/tigran/python_projects_epta/personal_projects/disser_epta/grp_forecast/figures/}%
+}
+
+% ─── Метаданные презентации ───────────────────────────────────────────────────
+\title{Прогнозирование ВРП субъектов Российской Федерации}
+\subtitle{с помощью ансамблевых методов машинного обучения}
+\author{Семенюченко~А.\,Г.\\[0.3em]
+  {\small Научный руководитель: Паточенко~Е.\,А.}}
+\institute{НИУ ВШЭ — Факультет компьютерных наук}
+\date{Москва, 2026}
+
+% ─── TOC-стиль ───────────────────────────────────────────────────────────────
+\setbeamertemplate{section in toc}{%
+  \textcolor{hsedark}{\textbf{\inserttocsectionnumber.}}\ \inserttocsection}
+
+%==============================================================================
+\begin{document}
+%==============================================================================
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 1: Титульный
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}[plain]
+\begin{tikzpicture}[remember picture, overlay]
+  %% Верхняя тёмно-синяя полоса
+  \fill[hsedark]
+    (current page.north west) rectangle
+    ([yshift=-2.8cm]current page.north east);
+  %% Нижняя полоса
+  \fill[hsedark]
+    (current page.south west) rectangle
+    ([yshift=0.72cm]current page.south east);
+  %% Круг-логотип (схематично)
+  \draw[white, line width=1.8pt]
+    ([xshift=1.20cm, yshift=-1.40cm]current page.north west) circle (0.62cm);
+  \node[white, font=\bfseries\footnotesize] at
+    ([xshift=1.20cm, yshift=-1.40cm]current page.north west) {ВШЭ};
+  %% Название вуза
+  \node[white, font=\scriptsize, anchor=west] at
+    ([xshift=2.10cm, yshift=-0.98cm]current page.north west)
+    {НАЦИОНАЛЬНЫЙ ИССЛЕДОВАТЕЛЬСКИЙ УНИВЕРСИТЕТ};
+  \node[white, font=\scriptsize\bfseries, anchor=west] at
+    ([xshift=2.10cm, yshift=-1.50cm]current page.north west)
+    {«ВЫСШАЯ ШКОЛА ЭКОНОМИКИ»};
+  \node[white, font=\tiny, anchor=west] at
+    ([xshift=2.10cm, yshift=-2.10cm]current page.north west)
+    {Факультет компьютерных наук \textbar{}
+     Образовательная программа «Анализ больших данных»};
+  %% Нижние подписи
+  \node[white, font=\scriptsize\bfseries, anchor=west] at
+    ([xshift=0.50cm, yshift=0.46cm]current page.south west)
+    {Магистерская диссертация};
+  \node[white, font=\scriptsize, anchor=east] at
+    ([xshift=-0.50cm, yshift=0.46cm]current page.south east)
+    {Москва, 2026};
+\end{tikzpicture}
+
+\vspace{3.0cm}
+\begin{center}
+  {\usebeamerfont{title}\color{hsedark}%
+    Прогнозирование валового регионального\\[0.2em]%
+    продукта (ВРП) субъектов Российской Федерации}\\[0.5em]
+  {\color{hseblue}\large%
+    с помощью ансамблевых методов машинного обучения}\\[0.8em]
+  {\color{hsemidgray}\rule{0.65\textwidth}{0.4pt}}\\[0.7em]
+  {\small
+  \begin{tabular}{rl}
+    \textbf{\color{hsedark}Выполнил:}           &
+      Семенюченко Артём Геннадьевич, студент ФКН НИУ ВШЭ\\[0.3em]
+    \textbf{\color{hsedark}Научный руководитель:} &
+      Паточенко Евгений Анатольевич, старший преп. ФКН НИУ ВШЭ
+  \end{tabular}}
+\end{center}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 2: Содержание
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Структура доклада}
+  \tableofcontents[subsectionstyle=hide]
+\end{frame}
+
+%==============================================================================
+\section{Актуальность и цель исследования}
+%==============================================================================
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 3: Актуальность
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Актуальность исследования}
+\begin{columns}[T]
+  \begin{column}{0.55\textwidth}
+    \begin{block}{Почему прогнозирование ВРП регионов?}
+      \begin{itemize}
+        \item ВРП~— ключевой индикатор экономического развития 85~субъектов~РФ
+        \item \textbf{Высокая территориальная неоднородность}: сырьевые,
+              индустриальные, аграрные, бюджетно-зависимые регионы
+        \item \textbf{Лаг публикации} Росстата~— данные появляются
+              \textit{после} отчётного периода, тогда как бюджетное
+              планирование требует оперативных оценок
+        \item Суммарный ВРП за 2024~г.~--- \textbf{186\,545 млрд~руб.} (ИФО 104,4\%)
+      \end{itemize}
+    \end{block}
+  \end{column}
+  \begin{column}{0.43\textwidth}
+    \begin{block}{Вызовы задачи}
+      \begin{itemize}
+        \item Панельная структура: наблюдение~= (регион, год)
+        \item Временна\'{я} зависимость + межрегиональная неоднородность
+        \item Риск утечки данных (\textit{leakage})
+        \item Структурные разрывы:\\
+              кризисы 2008–09, 2014–15, 2020, 2022–23
+        \item Малая панель ($\approx$\,20 наблюдений/регион)
+      \end{itemize}
+    \end{block}
+  \end{column}
+\end{columns}
+\vspace{0.4em}
+\begin{alertblock}{}
+  \centering
+  \textbf{Цель}: воспроизводимый pipeline прогнозирования ВРП на основе ML
+  с корректной out-of-sample валидацией и явным контролем leakage
+\end{alertblock}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 4: Цель и задачи
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Цель и задачи исследования}
+\begin{block}{Цель работы}
+  Разработка и оценка воспроизводимого пайплайна прогнозирования ВРП
+  субъектов~РФ на панельных временны\'{х} данных с использованием
+  эконометрических базовых моделей и ансамблевых методов машинного обучения.
+\end{block}
+\vspace{0.5em}
+\textbf{\color{hsedark}Ключевые задачи:}
+\begin{enumerate}
+  \item Сформировать панельную базу данных за \textbf{2005–2024~гг.}
+        (Росстат, ЕМИСС, Банк России, Минэкономразвития, Казначейство)
+  \item Построить \textbf{базовые} (наивный, AR(1), Ridge~с~FE) и
+        \textbf{ансамблевые} модели (LightGBM, CatBoost, GPBoost, EmbMLP)
+  \item Реализовать leakage-free \textbf{expanding-window} кросс-валидацию
+        (тестовый период: 2015–2023)
+  \item Провести \textbf{ablation study} по блокам признаков и
+        \textbf{robustness checks} (выбросы и кризисные периоды)
+  \item Построить \textbf{SHAP-интерпретацию} лучшей одиночной модели
+        и сформировать взвешенный ансамбль
+\end{enumerate}
+\end{frame}
+
+%==============================================================================
+\section{Данные и методология}
+%==============================================================================
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 5: Данные и признаковое пространство
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Данные и признаковое пространство}
+\begin{columns}[T]
+  \begin{column}{0.48\textwidth}
+    \textbf{\color{hsedark}Эмпирическая база:}
+    \begin{itemize}
+      \item 85~субъектов РФ, \textbf{2005–2024~гг.}
+      \item Целевая переменная:
+            $\Delta\log\text{ВРП}_{i,t} = \log\text{ВРП}_{i,t} - \log\text{ВРП}_{i,t-1}$
+      \item Горизонт прогноза: $h=1$ (один год вперёд)
+    \end{itemize}
+    \vspace{0.5em}
+    \textbf{\color{hsedark}Предобработка:}
+    \begin{itemize}
+      \item Дефлирование ИПЦ (денежные показатели)
+      \item \texttt{RobustScaler} (квартильная нормировка) — устойчивость к выбросам (Москва, ХМАО, ЯНАО)
+      \item Все операции обучаются \textbf{исключительно на Train}$_k$ каждого fold'а
+    \end{itemize}
+  \end{column}
+  \begin{column}{0.50\textwidth}
+    \textbf{\color{hsedark}Блоки признаков}
+    $X_{i,t} = \bigl[X^{\text{lag}}, X^{\text{prod}}, X^{\text{inv}},
+     X^{\text{lab}}, X^{\text{bud}}, X^{\text{macro}}, X^{\text{price}},
+     X^{\text{shock}}, X^{\text{cat}}\bigr]$:
+    \vspace{0.3em}
+    {\small
+    \begin{tabular}{@{}ll@{}}
+      \toprule
+      Блок & Содержание \\
+      \midrule
+      \textsc{lag}  & Лаги ВРП, скользящие средние \\
+      \textsc{prod} & Промышленность, с/х, стр-во, торговля \\
+      \textsc{inv}  & Инвестиции в основной капитал \\
+      \textsc{lab}  & Занятость, зарплата, доходы населения \\
+      \textsc{bud}  & Доходы/расходы бюджета, трансферты \\
+      \textsc{macro}& Ключевая ставка, кредитные показатели \\
+      \textsc{price}& USD/RUB волатильность, прод. корзина \\
+      \textsc{shock}& Dummy кризисов 2008–09, 2014–15, 2020, 2022 \\
+      \textsc{cat}  & Тип региона, федеральный округ \\
+      \bottomrule
+    \end{tabular}}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 6: Схема валидации
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Методология: expanding-window валидация и метрики}
+\begin{columns}[T]
+  \begin{column}{0.55\textwidth}
+    \textbf{\color{hsedark}Схема расширяющегося окна (9 fold'ов):}
+    \vspace{0.3em}
+    \begin{center}
+    \begin{tikzpicture}[xscale=0.55, yscale=0.65]
+      % Оси
+      \draw[->, thick, color=hsedark] (-0.1,0) -- (16.8,0);
+      \foreach \x/\yr in {0/2005, 5.45/2010, 9.9/2015, 14.4/2020, 15.8/2023}
+        \node[font=\tiny, below=1pt] at (\x,0) {\yr};
+
+      % fold 1: train 0–9.9, test 9.9–10.8
+      \fill[hseblue!35] (0,0.25) rectangle (9.90,0.75);
+      \fill[hsegreen!70] (9.90,0.25) rectangle (10.80,0.75);
+      \node[font=\tiny, left=2pt] at (0,0.50) {fold 1};
+
+      % fold 2
+      \fill[hseblue!35] (0,0.90) rectangle (10.80,1.40);
+      \fill[hsegreen!70] (10.80,0.90) rectangle (11.70,1.40);
+      \node[font=\tiny, left=2pt] at (0,1.15) {fold 2};
+
+      % fold 3
+      \fill[hseblue!35] (0,1.55) rectangle (11.70,2.05);
+      \fill[hsegreen!70] (11.70,1.55) rectangle (12.60,2.05);
+      \node[font=\tiny, left=2pt] at (0,1.80) {fold 3};
+
+      \node at (8, 2.40) {\Large\ldots};
+
+      % fold 9
+      \fill[hseblue!35] (0,2.80) rectangle (14.40,3.30);
+      \fill[hsegreen!70] (14.40,2.80) rectangle (15.30,3.30);
+      \node[font=\tiny, left=2pt] at (0,3.05) {fold 9};
+
+      % Легенда
+      \fill[hseblue!35] (10,3.55) rectangle (11.1,3.85);
+      \node[right, font=\tiny] at (11.1,3.70) {Train};
+      \fill[hsegreen!70] (13,3.55) rectangle (14.1,3.85);
+      \node[right, font=\tiny] at (14.1,3.70) {Test (1 год)};
+    \end{tikzpicture}
+    \end{center}
+    {\small\color{hsedark}Начальное окно: 2005–2014 ($\geq 10$ лет).
+    Гиперпараметры~— через Optuna (60~trials, только на Train$_k$).}
+  \end{column}
+  \begin{column}{0.43\textwidth}
+    \textbf{\color{hsedark}Постановка задачи:}
+    \[\hat{y}_{i,t+1} = f_\theta\!\left(X_{i,t}^{\text{available}}\right)\]
+    \[y_{i,t} = \log\bigl(\text{GRP}_{i,t}^{\text{real}}\bigr)\]
+
+    \vspace{0.4em}
+    \textbf{\color{hsedark}Метрики качества:}
+    \begin{align*}
+      &\text{RMSE} = \sqrt{\tfrac{1}{n}\textstyle\sum_j(y_j-\hat{y}_j)^2}\\[4pt]
+      &\text{MAE}  = \tfrac{1}{n}\textstyle\sum_j|y_j-\hat{y}_j|\\[4pt]
+      &R^2_{\text{OOS}} = 1 -
+        \frac{\sum_j(y_j-\hat{y}_j)^2}{\sum_j(y_j-\hat{y}_j^{\text{bench}})^2}
+    \end{align*}
+    {\small Бенчмарк~— наивный прогноз.
+    $R^2_{\text{OOS}}>0$ означает превосходство над бенчмарком.}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 7: Модели
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Сравниваемые модели}
+\begin{columns}[T]
+  \begin{column}{0.48\textwidth}
+    \begin{block}{Базовые модели}
+      \begin{itemize}
+        \item \textbf{Наивный прогноз}: $\hat{y}_{i,t+1} = y_{i,t}$
+        \item \textbf{AR(1)}: $y_{i,t+1} = \alpha_i + \rho_i\,y_{i,t} + \varepsilon$
+              (оценивается по каждому региону)
+        \item \textbf{Ridge с~FE}: L2-регрессия с индивидуальными
+              и временны\'{м}и фиксированными эффектами
+      \end{itemize}
+    \end{block}
+    \vspace{0.4em}
+    \begin{block}{Взвешенный ансамбль}
+      $\hat{y}^{\text{ens}} = w\,\hat{y}^{\text{CB}} + (1-w)\,\hat{y}^{\text{LGB}}$\\[4pt]
+      Перебор $w\in\{0{,}00;\,0{,}05;\,\ldots;\,1{,}00\}$ по pooled hold-out RMSE.\\[4pt]
+      Оптимум: $w^* = 0{,}25$
+      $\;\Rightarrow\;$ \textbf{CB$\times$0,25 + LGB$\times$0,75}
+    \end{block}
+  \end{column}
+  \begin{column}{0.50\textwidth}
+    \begin{block}{Ансамблевые алгоритмы ML}
+      \begin{itemize}
+        \item \textbf{LightGBM}: градиентный бустинг, leaf-wise рост, EFB
+        \item \textbf{CatBoost}: ordered boosting, симметричные деревья,
+              устойчивость к кат. признакам
+        \item \textbf{GPBoost}: бустинг + гауссовские случайные эффекты
+              регионов\\[-2pt]
+              {\small$y_{i,t} = F(X_{i,t}) + b_i + \varepsilon_{i,t},\quad
+               b_i\sim\mathcal{N}(0,\sigma_b^2)$}
+        \item \textbf{EmbMLP}: нейросеть с обучаемыми эмбеддингами регионов
+      \end{itemize}
+    \end{block}
+  \end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\section{Результаты экспериментов}
+%==============================================================================
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 8: Поиск веса ансамбля
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Взвешенный ансамбль: поиск оптимального веса}
+\begin{columns}[T]
+  \begin{column}{0.56\textwidth}
+    \includegraphics[width=\linewidth]{ensemble_weight_search.png}
+  \end{column}
+  \begin{column}{0.42\textwidth}
+    \vspace{0.8em}
+    \textbf{\color{hsedark}Процедура post-hoc оптимизации:}
+    \begin{itemize}
+      \item После независимой настройки и CV каждой подмодели
+      \item Перебор $w \in \{0{,}00;\,0{,}05;\,\ldots;\,1{,}00\}$
+      \item Минимизация pooled RMSE на объединённых hold-out предсказаниях 9~fold'ов
+      \item \textbf{Целевая переменная training-части не задействуется}~--- leakage исключён
+    \end{itemize}
+    \vspace{0.6em}
+    \begin{block}{Результат}
+      $w^* = 0{,}25$;\quad $\text{RMSE}(w^*) = 0{,}0382$\\[4pt]
+      LightGBM вносит бо\`{о}льший вклад (доля 0,75).\\[4pt]
+      Выигрыш ансамбля над LightGBM~--- \textbf{1,6\%} по RMSE (высокая корреляция предсказаний).
+    \end{block}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 9: Сводная таблица метрик
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Сравнение моделей: сводная таблица метрик}
+\begin{columns}[T]
+  \begin{column}{0.56\textwidth}
+    \includegraphics[width=\linewidth]{metrics_table.png}
+  \end{column}
+  \begin{column}{0.42\textwidth}
+    \vspace{0.3em}
+    \begin{block}{\small Ключевые итоги}
+      {\small
+      \begin{itemize}
+        \item \textbf{Лучшая}: ансамбль CB$\times$0,25 + LGB$\times$0,75\\
+              RMSE~$= \mathbf{0{,}0382}$\\
+              снижение \textbf{8,8\%} vs наивный $(0{,}0419)$\\
+              $R^2_{\text{OOS}} = 0{,}144 > 0$
+        \item \textbf{LightGBM}: RMSE~$= 0{,}0388$, лучшая одиночная
+        \item \textbf{CatBoost}: RMSE~$= 0{,}0408$
+        \item AR(1), EmbMLP, Ridge~с~FE~--- \textit{уступают} наивному
+        \item \textbf{GPBoost}: нестабильный (OOS-прогноз отключает GP-компоненту)
+      \end{itemize}}
+    \end{block}
+    \vspace{0.4em}
+    {\small\color{hsedark}
+      \textbf{В абс. выражении:}\\
+      MAPE ансамбля~$= \mathbf{2{,}88\%}$\\
+      MAE~$= 6{,}24$~млрд~руб. (vs~7,25 у наивного)}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 10: RMSE по времени
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{RMSE прогнозов: тестовые годы 2015–2023}
+\begin{center}
+  \includegraphics[width=0.85\linewidth]{rmse_and_growth_combined.png}
+\end{center}
+\vspace{-0.6em}
+\begin{columns}
+  \begin{column}{0.50\textwidth}
+    {\small\textbf{\color{hsedark}Обучающий период (2006–2014):}\\
+     Ср. рост ВРП: 4,2\%/год;\;
+     макс.~9,7\% (2007);\; мин.~$-$4,5\% (2009)}
+  \end{column}
+  \begin{column}{0.48\textwidth}
+    {\small\textbf{\color{hsedark}Тестовый период (2015–2023):}\\
+     Ансамбль CB+LGB сохраняет \textbf{наименьший RMSE}
+     во все кризисные годы (2020, 2022–23)}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 11: Ablation study
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Ablation study: вклад блоков признаков (LightGBM)}
+\begin{columns}[T]
+  \begin{column}{0.56\textwidth}
+    \includegraphics[width=\linewidth]{ablation_study.png}
+  \end{column}
+  \begin{column}{0.42\textwidth}
+    \vspace{0.5em}
+    \textbf{\color{hsedark}Сценарии последовательного добавления блоков:}
+    \vspace{0.3em}
+    {\small
+    \begin{tabular}{@{}lp{5cm}@{}}
+      \toprule
+      Сценарий & Состав \\
+      \midrule
+      \textbf{A0} & Только лаги ВРП \\
+      \textbf{A1} & A0 + производственный блок \\
+      \textbf{A2} & A1 + инвестиц. + трудовой + бюджетный \\
+      \textbf{A3} & A2 + макро + цены + кат. + кризисные dummy \\
+      \bottomrule
+    \end{tabular}}
+    \vspace{0.5em}
+    \begin{block}{Вывод}
+      \textbf{Наибольший прирост}: A0$\to$A1 — производственный блок
+      снижает RMSE с $0{,}044$ до $0{,}043$.\\[4pt]
+      Сценарии A2 и A3 практически не отличимы от A1 у LightGBM
+      (бюджетные данные~— часть с пропусками).\\[4pt]
+      CatBoost использует кат. признаки из A3 эффективнее.
+    \end{block}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 12: Robustness checks
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Анализ устойчивости (Robustness Checks)}
+\begin{columns}[T]
+  \begin{column}{0.50\textwidth}
+    \textbf{\color{hsedark}RC1~— без регионов-выбросов}\\[2pt]
+    {\small Исключены: Москва, ХМАО, ЯНАО, Сахалинская обл.}
+    \vspace{0.2em}
+    \includegraphics[width=\linewidth]{rc1_outliers.png}
+    \vspace{0.1em}
+    {\small\color{hsedark}$\Rightarrow$ Ансамбль сохраняет лидерство;\\
+     LightGBM опережает CatBoost~— ранжирование устойчиво}
+  \end{column}
+  \begin{column}{0.48\textwidth}
+    \textbf{\color{hsedark}RC2~— кризисные vs нормальные годы}\\[2pt]
+    {\small Кризисные fold'ы: 2008–09, 2014–15, 2020, 2022–23}
+    \vspace{0.2em}
+    \includegraphics[width=\linewidth]{rc2_crisis.png}
+    \vspace{0.1em}
+    {\small\color{hsedark}$\Rightarrow$ Ансамбль лучший в обеих подгруппах.\\
+     Бустинг устойчив в кризисные периоды (Lashina \& Grishunin, 2023)}
+  \end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\section{SHAP-интерпретация}
+%==============================================================================
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 13: SHAP global
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{SHAP-интерпретация: глобальный анализ (LightGBM)}
+\begin{columns}[T]
+  \begin{column}{0.56\textwidth}
+    \includegraphics[width=\linewidth]{shap_global.png}
+  \end{column}
+  \begin{column}{0.42\textwidth}
+    \vspace{0.3em}
+    \textbf{\color{hsedark}Топ-5 признаков по $\overline{|\phi_j|}$:}
+    \begin{enumerate}
+      \small
+      \item \texttt{usd\_rub\_volatility\_lag1}\\
+            {\tiny волатильность курса USD/RUB; вклад в~2~раза выше след.}
+      \item \texttt{min\_food\_basket\_cost\_lag1}\\
+            {\tiny стоимость минимального набора продуктов}
+      \item \texttt{policy\_rate\_lag1}\\
+            {\tiny номинальная ключевая ставка ЦБ РФ}
+      \item \texttt{policy\_rate\_real\_lag1}\\
+            {\tiny реальная ключевая ставка}
+      \item \texttt{paid\_services\_to\_grp\_lag1}\\
+            {\tiny доля платных услуг в ВРП}
+    \end{enumerate}
+    \vspace{0.4em}
+    \begin{block}{Ключевой вывод}
+      \textbf{MACRO\_BLOCK} и \textbf{PRICE\_BLOCK} доминируют над отраслевыми показателями.\\[4pt]
+      Высокая волатильность USD/RUB~— монетарная неопределённость,
+      подавляющая региональные инвестиции и рост ВРП.
+    \end{block}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 14: SHAP по типам регионов
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{SHAP: вклад блоков признаков по типам регионов}
+\begin{columns}[T]
+  \begin{column}{0.56\textwidth}
+    \includegraphics[width=\linewidth]{shap_group_heatmap.png}
+  \end{column}
+  \begin{column}{0.42\textwidth}
+    \vspace{0.5em}
+    \textbf{\color{hsedark}Интерпретация по блокам:}
+    \vspace{0.3em}
+    {\small
+    \begin{tabular}{@{}lll@{}}
+      \toprule
+      Блок & Вклад & Комментарий \\
+      \midrule
+      \textsc{macro}  & 0,21–0,27 & Лидер \textit{везде} \\
+      \textsc{price}  & 0,16–0,21 & Второй по важности \\
+      \textsc{prod}   & 0,17 (сырьевые) & Важен для добывающих \\
+      \textsc{inv}    & 0,11–0,16 & Выше у сервисных \\
+      \textsc{cat}    & $\approx 0$ & Нулевой вклад \\
+      \textsc{lag}    & 0,09–0,10 & Низкая автокорр. \\
+      \bottomrule
+    \end{tabular}}
+    \vspace{0.5em}
+    \begin{alertblock}{\small Вывод о однородности}
+      {\small Все типы регионов реагируют на федеральные монетарные шоки
+      однородно~--- ДКП ЦБ РФ действует одновременно на всю территорию страны.}
+    \end{alertblock}
+  \end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\section{Заключение}
+%==============================================================================
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 15: Анализ ошибок + тест DM
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Анализ ошибок и тест Дибольда–Мариано}
+\begin{columns}[T]
+  \begin{column}{0.50\textwidth}
+    \textbf{\color{hsedark}Тепловая карта ошибок (MAE, регион × год)}
+    \vspace{0.2em}
+    \includegraphics[width=\linewidth]{error_heatmap.png}
+    {\tiny Наибольшие ошибки~--- регионы с нестационарной структурой
+     эк-ки (Ненецкий АО, Калининградская обл., Калмыкия)}
+  \end{column}
+  \begin{column}{0.48\textwidth}
+    \textbf{\color{hsedark}Тест Дибольда–Мариано (DM)}\\[2pt]
+    $H_0$: обе модели одинаково точны\\
+    $d_t = e_{1,t}^2 - e_{2,t}^2$;\quad $\text{DM} = \bar{d}/\text{SE}(\bar{d})$
+    \vspace{0.4em}
+    {\small
+    \begin{tabular}{@{}lrcc@{}}
+      \toprule
+      Сравнение & DM & $p$ (дв.) & $p$ (одн.) \\
+      \midrule
+      CatBoost vs Наивный & 0,046 & 0,963 & 0,482 \\
+      \rowcolor{hsetablehl}
+      \textbf{LightGBM vs Наивный} & \textbf{6,247} &
+        $\mathbf{<0{,}001}$ & $\mathbf{<0{,}001}$ \\
+      \bottomrule
+    \end{tabular}}
+    \vspace{0.5em}
+    \begin{block}{\small Вывод}
+      {\small LightGBM \textbf{статистически достоверно} превосходит
+      наивный прогноз ($\alpha = 0{,}001$, DM~$= 6{,}247$).\\[3pt]
+      CatBoost~--- выигрыш в RMSE есть, но статистически не значим
+      (высокая дисперсия между fold'ами в 2020 и 2022–23).\\[3pt]
+      Ансамбль наследует значимость от LightGBM (доля 0,75).}
+    \end{block}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 16: Заключение
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}{Заключение: основные результаты}
+\begin{columns}[T]
+  \begin{column}{0.55\textwidth}
+    \begin{block}{Главный результат}
+      \textbf{Ансамбль CB$\times$0,25 + LGB$\times$0,75} превзошёл все~8~моделей:
+      \begin{itemize}
+        \item RMSE~$= \mathbf{0{,}0382}$~---
+              снижение \textbf{8,8\%} vs~наивный ($0{,}0419$)
+        \item $R^2_{\text{OOS}} = 0{,}144 > 0$~---
+              устойчивое превосходство вне обучающей выборки
+        \item \textbf{MAPE~$= 2{,}88\%$}, MAE~$= 6{,}24$~млрд~руб.
+        \item Превосходство статистически значимо:\\
+              DM~$= 6{,}247$, $p < 0{,}001$
+      \end{itemize}
+    \end{block}
+    \vspace{0.3em}
+    \begin{block}{SHAP-интерпретация}
+      Монетарные и валютные переменные \textbf{доминируют}
+      над отраслевыми~--- все типы регионов однородно реагируют
+      на шоки ДКП ЦБ~РФ.
+      Производственный блок важен для сырьевых регионов.
+    \end{block}
+  \end{column}
+  \begin{column}{0.43\textwidth}
+    \textbf{\color{hsedark}Дополнительные выводы:}
+    \begin{itemize}
+      \small
+      \item Ablation study: наибольший прирост~--- добавление производственного блока (A0$\to$A1)
+      \item Два robustness check подтвердили устойчивость ранжирования бустинговых моделей
+      \item GPBoost деградирует при OOS-прогнозировании из-за отключения GP-компоненты
+    \end{itemize}
+    \vspace{0.4em}
+    \textbf{\color{hsedark}Ограничения:}
+    \begin{itemize}
+      \small
+      \item Малая панель ($\approx 20$~наблюдений/регион)
+      \item Часть показателей доступна с лагом публикации
+      \item SHAP объясняет, но \textit{не доказывает} причинность
+    \end{itemize}
+    \vspace{0.4em}
+    \textbf{\color{hsedark}Практическая значимость:}\\
+    {\small Мониторинг региональной экономической динамики
+    и оперативная оценка ВРП до публикации официальной статистики}
+  \end{column}
+\end{columns}
+\end{frame}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% СЛАЙД 17: Спасибо за внимание
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{frame}[plain]
+\begin{tikzpicture}[remember picture, overlay]
+  \fill[hsedark]
+    (current page.north west) rectangle
+    ([yshift=-2.2cm]current page.north east);
+  \fill[hsedark]
+    (current page.south west) rectangle
+    ([yshift=0.72cm]current page.south east);
+  \draw[white, line width=1.8pt]
+    ([xshift=1.1cm, yshift=-1.1cm]current page.north west) circle (0.55cm);
+  \node[white, font=\bfseries\scriptsize] at
+    ([xshift=1.1cm, yshift=-1.1cm]current page.north west) {ВШЭ};
+  \node[white, font=\scriptsize\bfseries, anchor=west] at
+    ([xshift=1.9cm, yshift=-1.1cm]current page.north west)
+    {НИУ «ВЫСШАЯ ШКОЛА ЭКОНОМИКИ»};
+  \node[white, font=\tiny, anchor=west] at
+    ([xshift=0.5cm, yshift=0.46cm]current page.south west)
+    {ФКН НИУ ВШЭ \textbar{}
+     ОП «Анализ больших данных» \textbar{} Москва, 2026};
+\end{tikzpicture}
+
+\vspace{2.6cm}
+\begin{center}
+  {\color{hsedark}\LARGE\bfseries Спасибо за внимание!}\\[1.0em]
+  {\color{hsemidgray}\rule{0.55\textwidth}{0.4pt}}\\[0.9em]
+  {\small
+  \begin{tabular}{rl}
+    \textbf{\color{hsedark}Автор:} &
+      Семенюченко Артём Геннадьевич\\[0.3em]
+    \textbf{\color{hsedark}Науч. руководитель:} &
+      Паточенко Евгений Анатольевич\\[0.3em]
+    \textbf{\color{hsedark}Тема:} &
+      Прогнозирование ВРП субъектов РФ\\
+    & ансамблевыми методами машинного обучения
+  \end{tabular}}
+  \\[1.0em]
+  \begin{tikzpicture}
+    \node[draw=hsedark, rounded corners=3pt, inner sep=6pt,
+          fill=hsegray, font=\small\color{hsedark}] {
+      \begin{tabular}{c}
+        Лучшая модель: CB$\times$0,25 + LGB$\times$0,75\\
+        \textbf{RMSE~$= 0{,}0382$} \quad \textbf{MAPE~$= 2{,}88\%$} \quad $R^2_{\text{OOS}} = 0{,}144$
+      \end{tabular}};
+  \end{tikzpicture}
+\end{center}
+\end{frame}
+
+\end{document}
