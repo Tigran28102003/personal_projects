@@ -27,5 +27,5 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Data / models (large binaries — commit selectively)
-grp_forecast/data/processed/*.parquet
+# grp_forecast/data/processed/*.parquet
 grp_forecast/catboost_info/
