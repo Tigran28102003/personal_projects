@@ -53,6 +53,9 @@ warnings.filterwarnings(
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 # ==================== Utility Functions ====================
 
 def smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -740,7 +743,7 @@ def _make_loader(X_seq: np.ndarray, X_ex: np.ndarray, y: np.ndarray, batch_size:
 
 
 def _train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
-                  lr: float, epochs: int, patience: int = 5, task: str = 'reg', device: str = 'cpu'):
+                  lr: float, epochs: int, patience: int = 5, task: str = 'reg', device: str = DEVICE):
     """
     Обучает `CryptoNet`: Adam + `ReduceLROnPlateau` + ручной early stopping.
 
@@ -903,7 +906,7 @@ class NeuralForecaster:
                 lr = hp.pop('learning_rate')
                 set_global_seed(self.seed)
                 model = CryptoNet(self.window_size, exog_dim, arch, hp)
-                _, val_smape = _train_model(model, train_loader, val_loader, lr, self.epochs, patience=5, task='reg')
+                _, val_smape = _train_model(model, train_loader, val_loader, lr, self.epochs, patience=5, task='reg', device=DEVICE)
                 return val_smape
 
             study = run_optuna_study(
@@ -920,7 +923,7 @@ class NeuralForecaster:
             lr = best_params.pop('learning_rate')
             set_global_seed(self.seed)
             model = CryptoNet(self.window_size, exog_dim, arch, best_params)
-            model, _ = _train_model(model, train_loader, val_loader, lr, self.epochs, patience=5, task='reg')
+            model, _ = _train_model(model, train_loader, val_loader, lr, self.epochs, patience=5, task='reg', device=DEVICE)
             self.models_[arch] = model
 
             model.eval()
@@ -1243,19 +1246,22 @@ class StackingClassifierModel(ForecastBase, BaseEstimator):
                 remainder='drop'
             )
 
+
+            _GPU = torch.cuda.is_available()
+
+
             base_estimators = {
                 'RandomForest': [
                     ("rf",  RandomForestClassifier(random_state=self.seed, class_weight='balanced')),
                     ("knn", KNeighborsClassifier())
                 ],
                 'CatBoost': [
-                    ("cat", CatBoostClassifier_clf(random_seed=self.seed, verbose=0)),
-                    ("knn", KNeighborsClassifier())
+                    ("cat", CatBoostRegressor(random_seed=self.seed, verbose=0,
+                                            task_type='GPU' if _GPU else 'CPU')),
                 ],
                 'XGBoost': [
-                    ("xgb", XGBClassifier(random_state=self.seed, verbosity=0, n_jobs=-1,
-                                          eval_metric='logloss', use_label_encoder=False)),
-                    ("knn", KNeighborsClassifier())
+                    ("xgb", XGBRegressor(random_state=self.seed, verbosity=0, n_jobs=-1,
+                                        device='cuda' if _GPU else 'cpu')),
                 ],
                 'LightGBM': [
                     ('lgbm', LGBMClassifier(random_state=self.seed, n_jobs=-1,
