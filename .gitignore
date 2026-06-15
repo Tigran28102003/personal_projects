@@ -27,3 +27,6 @@ venv/
 *.parquet
 *.xlsx
 disser_epta/.claude/
+
+метрика_проект
+diploma/ACTUAL_VERSION/Bitcoin-price-prediction/
