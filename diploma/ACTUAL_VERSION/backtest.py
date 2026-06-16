@@ -19,6 +19,9 @@ Signal rule
 `y_pred[t] > y_actual[t-1]`  ->  long BTC (hold 1 unit)
 `y_pred[t] <= y_actual[t-1]` ->  flat (no position)
 
+`oof_df` carries the *reconstructed price* OOF (P̂_t = P_{t-1}·exp(r̂_t)), so the
+rule above is exactly the directional bet "predicted return > 0 -> long".
+
 A position change at time t incurs one round of fees + slippage on the notional
 `y_actual[t-1]` (the entry/exit price proxy).
 """
@@ -90,6 +93,16 @@ def simulate_strategy(
         net_pnl = pnl_usd - fee_usd - slippage_usd
         equity = np.cumsum(net_pnl)
 
+        # Перевод PnL в процентную доходность периода относительно предыдущей цены
+        # (нотинал = одна единица BTC по цене prices[t-1]). Sharpe считается именно
+        # на ret_pct, а не на USD-PnL: процентная доходность масштабо-инвариантна и
+        # сопоставима между периодами разной цены BTC (иначе высокоценовые куски
+        # ряда искусственно доминировали бы в оценке риска).
+        base = np.empty(n)
+        base[0] = prices[0]
+        base[1:] = prices[:-1]
+        ret_pct = np.divide(net_pnl, base, out=np.zeros_like(net_pnl), where=base != 0)
+
         grp = grp.copy()
         grp['signal'] = signal
         grp['position'] = position
@@ -97,6 +110,7 @@ def simulate_strategy(
         grp['fee_usd'] = fee_usd
         grp['slippage_usd'] = slippage_usd
         grp['pnl_usd'] = net_pnl
+        grp['ret_pct'] = ret_pct
         grp['equity'] = equity
         results.append(grp)
 
@@ -115,7 +129,11 @@ def buy_and_hold(oof_df: pd.DataFrame) -> pd.DataFrame:
         grp = grp.sort_values('timestamp').copy()
         prices = grp['actual'].values
         pnl = np.concatenate([[0.0], np.diff(prices)])
+        base = np.empty(len(prices))
+        base[0] = prices[0]
+        base[1:] = prices[:-1]
         grp['bh_pnl'] = pnl
+        grp['bh_ret_pct'] = np.divide(pnl, base, out=np.zeros_like(pnl), where=base != 0)
         grp['bh_equity'] = np.cumsum(pnl)
         results.append(grp)
     return pd.concat(results, ignore_index=True)
@@ -126,8 +144,9 @@ def buy_and_hold(oof_df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _sharpe(returns: np.ndarray, periods_per_year: int) -> float:
-    """Annualised Sharpe ratio (Rf = 0)."""
-    if returns.std() == 0:
+    """Annualised Sharpe ratio (Rf = 0) on per-period percentage returns."""
+    returns = np.asarray(returns, dtype=float)
+    if returns.size == 0 or np.std(returns) == 0:
         return float('nan')
     return float(np.mean(returns) / np.std(returns) * np.sqrt(periods_per_year))
 
@@ -169,7 +188,7 @@ def backtest_summary(
             'total_return_usd': float(sg['equity'].iloc[-1]),
             'pnl_usd': float(sg['pnl_usd'].sum()),
             'total_fees_usd': float(sg['fee_usd'].sum() + sg['slippage_usd'].sum()),
-            'sharpe': _sharpe(sg['pnl_usd'].values, periods_per_year),
+            'sharpe': _sharpe(sg['ret_pct'].values, periods_per_year),
             'max_drawdown_usd': _max_drawdown(sg['equity'].values),
             'turnover': int(trades),
         })
@@ -181,7 +200,7 @@ def backtest_summary(
             'total_return_usd': float(bh['bh_equity'].iloc[-1]),
             'pnl_usd': float(bh['bh_pnl'].sum()),
             'total_fees_usd': 0.0,
-            'sharpe': _sharpe(bh['bh_pnl'].values, periods_per_year),
+            'sharpe': _sharpe(bh['bh_ret_pct'].values, periods_per_year),
             'max_drawdown_usd': _max_drawdown(bh['bh_equity'].values),
             'turnover': 0,
         })

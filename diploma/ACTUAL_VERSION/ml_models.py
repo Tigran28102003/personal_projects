@@ -102,6 +102,29 @@ def mase(y_true: np.ndarray, y_pred: np.ndarray, y_train: np.ndarray) -> float:
     return float(np.mean(np.abs(y_true - y_pred)) / scale)
 
 
+def directional_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    `Directional Accuracy` - доля наблюдений, в которых знак прогнозируемого
+    приращения (направление: вверх/вниз) совпал с фактическим.
+
+    Предназначена для таргета-доходности: предсказание считается верным, если
+    `(y_pred > 0) == (y_true > 0)`. В отличие от MAE/RMSE/SMAPE, эта метрика не
+    вырождается на почти-случайном блуждании цены, где уровень ошибки у всех
+    моделей близок к персистентности: она напрямую отвечает на вопрос, есть ли
+    у модели направленный навык сверх «вчера = сегодня». DA около 0.5 означает
+    отсутствие предсказательной силы.
+
+    `y_true`: фактическая доходность на тесте
+    `y_pred`: прогноз доходности на тесте
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    mask = np.isfinite(y_true) & np.isfinite(y_pred)
+    if mask.sum() == 0:
+        return float('nan')
+    return float(np.mean((y_true[mask] > 0) == (y_pred[mask] > 0)))
+
+
 def compute_metrics(
         y_true: np.ndarray,
         y_pred: np.ndarray,
@@ -111,21 +134,26 @@ def compute_metrics(
     подсчет метрик на трейн- и тест-выборках
 
     метрики:
-    * `MAE` - mean absolute error
-    * `RMSE` - root mean squared error
-    * `SMAPE` - symmetric mean absolute percentage error
-    * `MASE` - mean absolute scaled error
+    * `MAE`   - mean absolute error
+    * `RMSE`  - root mean squared error
+    * `SMAPE` - symmetric mean absolute percentage error (осмысленна в пространстве
+                цены; на доходностях знаменатель -> 0 при смене знака, поэтому при
+                таргете-доходности её следует читать только на восстановленной цене)
+    * `MASE`  - mean absolute scaled error
+    * `DA`    - directional accuracy (доля совпадений знака приращения)
     """
     mae_val = mean_absolute_error(y_true, y_pred)
     rmse_val = np.sqrt(mean_squared_error(y_true, y_pred))
     smape_val = smape(y_true, y_pred)
+    da_val = directional_accuracy(y_true, y_pred)
 
     if y_train is not None:
         mase_val = mase(y_true, y_pred, y_train)
     else:
         mase_val = None
 
-    return {'mae': mae_val, 'rmse': rmse_val, 'smape': smape_val, 'mase': mase_val}
+    return {'mae': mae_val, 'rmse': rmse_val, 'smape': smape_val,
+            'mase': mase_val, 'da': da_val}
 
 
 

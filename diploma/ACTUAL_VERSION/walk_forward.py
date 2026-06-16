@@ -230,6 +230,7 @@ def _nn_objective(
     epochs: int,
     batch_size: int,
     seed: int,
+    target_col: str = 'BTC',
 ):
     """Returns an Optuna objective for one CryptoNet architecture."""
     def objective(trial):
@@ -237,7 +238,7 @@ def _nn_objective(
         lr = hp.pop('learning_rate')
         reg = CryptoNetRegressor(
             arch=arch,
-            target_col='BTC',
+            target_col=target_col,
             feature_cols=feature_cols,
             window_size=window_size,
             hp=hp,
@@ -288,7 +289,7 @@ def run_walk_forward(
 
     Returns
     -------
-    metrics_df : per-fold metrics (fold, model, MAE, RMSE, SMAPE, MASE, n_train, n_test)
+    metrics_df : per-fold metrics (fold, model, MAE, RMSE, SMAPE, MASE, DA, n_train, n_test)
     oof_df     : OOF predictions (timestamp, actual, predicted, fold, model)
     """
     if model_family not in ('GB', 'NN'):
@@ -348,7 +349,7 @@ def run_walk_forward(
             seq_test_df = df.iloc[hist_start : int(test_idx[-1]) + 1][seq_cols]
 
             study = run_optuna_study(
-                _nn_objective(arch, seq_train_df, selected, window_size, epochs, batch_size, fold_seed),
+                _nn_objective(arch, seq_train_df, selected, window_size, epochs, batch_size, fold_seed, target_col=target_col),
                 direction='minimize',
                 n_trials=optuna_n_trials,
                 seed=fold_seed,
@@ -387,6 +388,7 @@ def run_walk_forward(
             'RMSE': metrics['rmse'],
             'SMAPE': metrics['smape'],
             'MASE': metrics['mase'],
+            'DA': metrics['da'],
             'n_train': len(train_idx),
             'n_test': len(test_idx),
         })
