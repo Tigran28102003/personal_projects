@@ -33,13 +33,14 @@ from typing import Callable, Optional
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import RobustScaler
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.metrics import make_scorer
+from sklearn.metrics import make_scorer, roc_auc_score
 
 from ml_models import (
     smape,
     compute_metrics,
     run_optuna_study,
     CryptoNetRegressor,
+    CryptoNetClassifier,
     _sample_crypto_hparams,
     set_global_seed,
     DEVICE,
@@ -189,6 +190,11 @@ def preprocess_fold(
 # Optuna objective factories
 # ---------------------------------------------------------------------------
 
+# Early-stopping patience for NN training (epochs without val-MAE improvement).
+# Поднят с 5 до 8: на доходностях валидационная кривая шумнее, ранний останов по
+# 5 эпохам обрывал обучение в шумовом минимуме.
+NN_PATIENCE = 8
+
 def _gb_objective(model_factory: Callable, X_train: pd.DataFrame, y_train: pd.Series):
     """
     Returns an Optuna objective for a GB sklearn-Pipeline factory.
@@ -236,6 +242,7 @@ def _nn_objective(
     def objective(trial):
         hp = _sample_crypto_hparams(trial, arch, window_size)
         lr = hp.pop('learning_rate')
+        weight_decay = hp.pop('weight_decay', 0.0)
         reg = CryptoNetRegressor(
             arch=arch,
             target_col=target_col,
@@ -245,11 +252,38 @@ def _nn_objective(
             lr=lr,
             epochs=epochs,
             batch_size=batch_size,
-            patience=5,
+            patience=NN_PATIENCE,
             seed=seed,
+            weight_decay=weight_decay,
         )
         reg.fit(seq_train_df)
-        return reg.best_val_smape_
+        return reg.best_val_score_
+    return objective
+
+
+def _nn_clf_objective(
+    arch: str,
+    seq_train_df: pd.DataFrame,
+    feature_cols: list[str],
+    window_size: int,
+    epochs: int,
+    batch_size: int,
+    seed: int,
+    target_col: str = 'BTC',
+):
+    """Returns an Optuna objective for one CryptoNet sign-classifier architecture
+    (minimises validation weighted-BCE)."""
+    def objective(trial):
+        hp = _sample_crypto_hparams(trial, arch, window_size)
+        lr = hp.pop('learning_rate')
+        weight_decay = hp.pop('weight_decay', 0.0)
+        clf = CryptoNetClassifier(
+            arch=arch, target_col=target_col, feature_cols=feature_cols,
+            window_size=window_size, hp=hp, lr=lr, epochs=epochs,
+            batch_size=batch_size, patience=NN_PATIENCE, seed=seed, weight_decay=weight_decay,
+        )
+        clf.fit(seq_train_df)
+        return clf.best_val_score_
     return objective
 
 
@@ -292,8 +326,8 @@ def run_walk_forward(
     metrics_df : per-fold metrics (fold, model, MAE, RMSE, SMAPE, MASE, DA, n_train, n_test)
     oof_df     : OOF predictions (timestamp, actual, predicted, fold, model)
     """
-    if model_family not in ('GB', 'NN'):
-        raise ValueError(f'model_family must be "GB" or "NN", got {model_family!r}')
+    if model_family not in ('GB', 'NN', 'NN_CLF'):
+        raise ValueError(f'model_family must be "GB", "NN" or "NN_CLF", got {model_family!r}')
 
     metrics_rows = []
     oof_rows = []
@@ -308,6 +342,7 @@ def run_walk_forward(
 
         # Top-k feature selection on train fold only (Pearson |corr| with target)
         selected = select_top_k_features(df_train[all_feature_cols], y_train, k=top_k)
+        clf_auc = np.nan
 
         if model_family == 'GB':
             X_train = df_train[selected]
@@ -334,7 +369,7 @@ def run_walk_forward(
             best.fit(X_train, y_train)
             y_pred = pd.Series(best.predict(X_test), index=y_test.index)
 
-        else:  # NN
+        elif model_family == 'NN':  # regression NN
             window_size = nn_config['window_size']
             epochs = nn_config['epochs']
             batch_size = nn_config['batch_size']
@@ -358,6 +393,7 @@ def run_walk_forward(
 
             best_params = dict(study.best_params)
             lr = best_params.pop('learning_rate')
+            weight_decay = best_params.pop('weight_decay', 0.0)
             set_global_seed(fold_seed)
             reg = CryptoNetRegressor(
                 arch=arch,
@@ -368,12 +404,53 @@ def run_walk_forward(
                 lr=lr,
                 epochs=epochs,
                 batch_size=batch_size,
-                patience=5,
+                patience=NN_PATIENCE,
                 seed=fold_seed,
                 device=DEVICE,
+                weight_decay=weight_decay,
             )
             reg.fit(seq_train_df)
             y_pred = reg.predict(seq_test_df)
+
+        else:  # NN_CLF — взвешенная классификация знака доходности
+            window_size = nn_config['window_size']
+            epochs = nn_config['epochs']
+            batch_size = nn_config['batch_size']
+            arch = model_name.split()[0]   # 'GRU (sign clf)' -> 'GRU'
+
+            seq_cols = selected + [target_col]
+            seq_train_df = df_train[seq_cols]
+            hist_start = max(0, int(train_idx[-1]) + 1 - window_size)
+            seq_test_df = df.iloc[hist_start : int(test_idx[-1]) + 1][seq_cols]
+
+            study = run_optuna_study(
+                _nn_clf_objective(arch, seq_train_df, selected, window_size, epochs, batch_size, fold_seed, target_col=target_col),
+                direction='minimize',
+                n_trials=optuna_n_trials,
+                seed=fold_seed,
+                study_name=f'{model_name}_fold{fold_idx}',
+            )
+
+            best_params = dict(study.best_params)
+            lr = best_params.pop('learning_rate')
+            weight_decay = best_params.pop('weight_decay', 0.0)
+            set_global_seed(fold_seed)
+            clf = CryptoNetClassifier(
+                arch=arch, target_col=target_col, feature_cols=selected,
+                window_size=window_size, hp=best_params, lr=lr, epochs=epochs,
+                batch_size=batch_size, patience=NN_PATIENCE, seed=fold_seed,
+                device=DEVICE, weight_decay=weight_decay,
+            )
+            clf.fit(seq_train_df)
+            proba = clf.predict_proba(seq_test_df).reindex(y_test.index)
+            # Псевдо-доходность (p - 0.5): знак = направленная ставка, проходит в общий
+            # OOF/бэктест без изменений (сигнал = p > 0.5). Величина для PnL не нужна —
+            # бэктест считает PnL по фактической цене, прогноз нужен только для сигнала.
+            y_pred = proba - 0.5
+            mask = proba.notna() & y_test.notna()
+            y_true_dir = (y_test[mask].to_numpy(dtype=float) > 0).astype(int)
+            if y_true_dir.size > 0 and y_true_dir.min() != y_true_dir.max():
+                clf_auc = float(roc_auc_score(y_true_dir, proba[mask].to_numpy(dtype=float)))
 
         y_pred_aligned = y_pred.reindex(y_test.index)
         metrics = compute_metrics(
@@ -381,14 +458,18 @@ def run_walk_forward(
             y_pred=y_pred_aligned.to_numpy(dtype=float),
             y_train=y_train.to_numpy(dtype=float),
         )
+        is_clf = (model_family == 'NN_CLF')
         metrics_rows.append({
             'fold': fold_idx,
             'model': model_name,
-            'MAE': metrics['mae'],
-            'RMSE': metrics['rmse'],
-            'SMAPE': metrics['smape'],
-            'MASE': metrics['mase'],
+            # Для классификатора метрики ВЕЛИЧИНЫ не определены (прогноз = вероятность),
+            # поэтому MAE/RMSE/SMAPE/MASE = NaN; содержательны DA и AUC.
+            'MAE': np.nan if is_clf else metrics['mae'],
+            'RMSE': np.nan if is_clf else metrics['rmse'],
+            'SMAPE': np.nan if is_clf else metrics['smape'],
+            'MASE': np.nan if is_clf else metrics['mase'],
             'DA': metrics['da'],
+            'AUC': clf_auc,
             'n_train': len(train_idx),
             'n_test': len(test_idx),
         })

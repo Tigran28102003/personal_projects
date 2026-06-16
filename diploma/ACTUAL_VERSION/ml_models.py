@@ -9,7 +9,7 @@ import random
 
 import matplotlib.pyplot as plt
 
-from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
 from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
@@ -647,17 +647,17 @@ def _sample_crypto_hparams(trial, arch: str, window_size: int) -> dict:
     if arch == 'MLP':
         hp['mlp_layers'] = trial.suggest_int('mlp_layers', 1, 3)
         for i in range(hp['mlp_layers']):
-            hp[f'mlp_units_{i}'] = trial.suggest_int(f'mlp_units_{i}', 32, 128, step=32)
+            hp[f'mlp_units_{i}'] = trial.suggest_int(f'mlp_units_{i}', 32, 192, step=32)
             hp[f'mlp_drop_{i}'] = trial.suggest_float(f'mlp_drop_{i}', 0.1, 0.5, step=0.1)
 
     elif arch == 'LSTM':
-        hp['lstm_units'] = trial.suggest_int('lstm_units', 32, 128, step=32)
+        hp['lstm_units'] = trial.suggest_int('lstm_units', 32, 192, step=32)
         hp['lstm_drop'] = trial.suggest_float('lstm_drop', 0.1, 0.5, step=0.1)
 
     elif arch == 'StackedLSTM':
         hp['stacked_layers'] = trial.suggest_int('stacked_layers', 2, 3)
         for i in range(hp['stacked_layers']):
-            hp[f'stack_units_{i}'] = trial.suggest_int(f'stack_units_{i}', 32, 128, step=32)
+            hp[f'stack_units_{i}'] = trial.suggest_int(f'stack_units_{i}', 32, 192, step=32)
             hp[f'stack_drop_{i}'] = trial.suggest_float(f'stack_drop_{i}', 0.1, 0.5, step=0.1)
 
     elif arch == 'CNN_LSTM':
@@ -666,20 +666,24 @@ def _sample_crypto_hparams(trial, arch: str, window_size: int) -> dict:
         conv_out = window_size - hp['cnn_kernel'] + 1
         max_pool = min(4, conv_out) if conv_out >= 2 else 1
         hp['pool_size'] = trial.suggest_int('pool_size', 1, max_pool)
-        hp['cnn_filters'] = trial.suggest_int('cnn_filters', 16, 64, step=16)
+        hp['cnn_filters'] = trial.suggest_int('cnn_filters', 16, 96, step=16)
         hp['cnn_drop'] = trial.suggest_float('cnn_drop', 0.1, 0.5, step=0.1)
-        hp['cnn_lstm_units'] = trial.suggest_int('cnn_lstm_units', 32, 128, step=32)
+        hp['cnn_lstm_units'] = trial.suggest_int('cnn_lstm_units', 32, 192, step=32)
 
     else:  # GRU
-        hp['gru_units'] = trial.suggest_int('gru_units', 32, 128, step=32)
+        hp['gru_units'] = trial.suggest_int('gru_units', 32, 192, step=32)
         hp['gru_drop'] = trial.suggest_float('gru_drop', 0.1, 0.5, step=0.1)
 
     hp['ex_layers'] = trial.suggest_int('ex_layers', 1, 2)
     for i in range(hp['ex_layers']):
-        hp[f'ex_units_{i}'] = trial.suggest_int(f'ex_units_{i}', 16, 64, step=16)
+        hp[f'ex_units_{i}'] = trial.suggest_int(f'ex_units_{i}', 16, 96, step=16)
         hp[f'ex_drop_{i}'] = trial.suggest_float(f'ex_drop_{i}', 0.1, 0.5, step=0.1)
 
-    hp['learning_rate'] = trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True)
+    # Оптимизация и регуляризация (общие для всех arch). LR-диапазон сужен к области,
+    # где RNN обучаются стабильно; weight_decay добавлен против переобучения на коротких
+    # фолдах (особенно hourly/5min, где у сети много параметров на мало данных).
+    hp['learning_rate'] = trial.suggest_float('learning_rate', 3e-4, 5e-3, log=True)
+    hp['weight_decay'] = trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True)
     return hp
 
 
@@ -784,29 +788,43 @@ class CryptoNet(nn.Module):
         return self.head(torch.cat([x, ex], dim=1))
 
 
-def _make_loader(X_seq: np.ndarray, X_ex: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool) -> DataLoader:
-    dataset = TensorDataset(
+def _make_loader(X_seq: np.ndarray, X_ex: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool,
+                 weights: Optional[np.ndarray] = None) -> DataLoader:
+    tensors = [
         torch.tensor(X_seq, dtype=torch.float32),
         torch.tensor(X_ex, dtype=torch.float32),
         torch.tensor(y, dtype=torch.float32),
-    )
+    ]
+    if weights is not None:
+        # Опциональные веса наблюдений (для взвешенной BCE в CryptoNetClassifier).
+        tensors.append(torch.tensor(weights, dtype=torch.float32))
+    dataset = TensorDataset(*tensors)
     drop_last = shuffle and len(dataset) > batch_size
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last)
 
 
 def _train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
-                  lr: float, epochs: int, patience: int = 5, task: str = 'reg', device: str = DEVICE):
+                  lr: float, epochs: int, patience: int = 5, task: str = 'reg', device: str = DEVICE,
+                  weight_decay: float = 0.0, grad_clip: float = 1.0):
     """
-    Обучает `CryptoNet`: Adam + `ReduceLROnPlateau` + ручной early stopping.
+    Обучает `CryptoNet`: AdamW (+weight_decay) + `ReduceLROnPlateau` + grad-clipping +
+    ручной early stopping.
 
-    `task='reg'`: минимизирует `smape_loss_torch`, early stopping/scheduler по `val_smape`.
+    `task='reg'`: минимизирует Huber/SmoothL1 loss, early stopping/scheduler по val MAE.
+        Huber выбран ВМЕСТО SMAPE: на таргете-доходности (центр ~0, частые значения у
+        нуля) знаменатель SMAPE |y|+|ŷ| вырождается, лосс доминируется шумовыми мелкими
+        доходностями, и обучение скатывается к предсказанию ~константы у нуля (отсюда
+        был DA < 0.5 на hourly). Huber устойчив к тяжёлым хвостам доходностей и корректно
+        ведёт себя в нуле; бустинги минимизируют L2 по той же причине.
     `task='clf'`: `BCEWithLogitsLoss`, early stopping/scheduler по `val_auc` (максимизация).
 
-    Возвращает `(model, best_val_metric)` - `model` загружен с весами лучшей по валидации эпохи.
+    `weight_decay` - L2-регуляризация в AdamW; `grad_clip` - max-norm обрезка градиента
+    (стабилизирует обучение RNN). Возвращает `(model, best_val_metric)` - `model` с весами
+    лучшей по валидации эпохи (для reg метрика = val MAE, меньше -> лучше).
     """
     model.to(device)
-    loss_fn = smape_loss_torch if task == 'reg' else nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.SmoothL1Loss() if task == 'reg' else nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min' if task == 'reg' else 'max', factor=0.5, patience=3
     )
@@ -821,8 +839,10 @@ def _train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoa
             xb_seq, xb_ex, yb = xb_seq.to(device), xb_ex.to(device), yb.to(device)
             optimizer.zero_grad()
             pred = model(xb_seq, xb_ex).squeeze(-1)
-            loss = loss_fn(yb, pred) if task == 'reg' else loss_fn(pred, yb)
+            loss = loss_fn(pred, yb)
             loss.backward()
+            if grad_clip:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
         model.eval()
@@ -836,7 +856,7 @@ def _train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoa
         val_true = torch.cat(val_true)
 
         if task == 'reg':
-            val_metric = smape_loss_torch(val_true, val_preds).item()
+            val_metric = torch.mean(torch.abs(val_true - val_preds)).item()  # val MAE
             improved = val_metric < best_val
         else:
             val_proba = torch.sigmoid(val_preds).cpu().numpy()
@@ -887,13 +907,14 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
                  feature_cols: Optional[list] = None, window_size: int = 10,
                  hp: Optional[dict] = None, lr: float = 1e-3, epochs: int = 20,
                  batch_size: int = 32, patience: int = 5, val_frac: float = 0.2,
-                 seed: int = 42, device: str = DEVICE):
+                 seed: int = 42, device: str = DEVICE, weight_decay: float = 0.0):
         self.arch = arch
         self.target_col = target_col
         self.feature_cols = feature_cols
         self.window_size = window_size
         self.hp = hp
         self.lr = lr
+        self.weight_decay = weight_decay
         self.epochs = epochs
         self.batch_size = batch_size
         self.patience = patience
@@ -948,10 +969,14 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
         # Свежая CryptoNet на каждый fit: веса/оптимизатор/скрытое состояние RNN
         # не наследуются между walk-forward фолдами.
         model = CryptoNet(self.window_size, self.exog_dim_, self.arch, self.hp)
-        self.model_, self.best_val_smape_ = _train_model(
+        self.model_, self.best_val_score_ = _train_model(
             model, train_loader, val_loader,
             lr=self.lr, epochs=self.epochs, patience=self.patience, task='reg', device=self.device,
+            weight_decay=self.weight_decay,
         )
+        # Метрика отбора/early-stopping теперь val MAE (раньше val SMAPE); алиас оставлен
+        # для обратной совместимости с кодом, читавшим best_val_smape_.
+        self.best_val_smape_ = self.best_val_score_
         return self
 
     def predict(self, X: pd.DataFrame) -> pd.Series:
@@ -972,6 +997,164 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
 
         preds = self.scaler_y_.inverse_transform(preds_scaled.reshape(-1, 1)).flatten()
         return pd.Series(preds, index=index, name=f'{self.arch} (sequence NN)')
+
+
+class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
+    """
+    Классификатор ЗНАКА следующей доходности (вверх/вниз) на базе CryptoNet.
+
+    Зачем отдельно от CryptoNetRegressor: регрессия минимизирует ошибку ВЕЛИЧИНЫ
+    (MSE/Huber), а её оптимум на почти непредсказуемом ряду с нулевым средним -
+    предсказывать ~0, что даёт Directional Accuracy ≈ 0.5. Здесь цель ставится
+    напрямую как бинарная `y = 1[r_t > 0]`, а лосс - ВЗВЕШЕННАЯ BCE с весом `|r_t|`
+    (нормирован к среднему по трейну + небольшой пол `weight_floor`): крупные
+    движения важнее, шумовые околонулевые «перевороты знака» почти не штрафуются.
+    Так обучение выравнивается с целевой метрикой DA.
+
+    Окна как в регрессоре: `x_seq` - window_size прошлых доходностей, `x_ex` -
+    экзогенные признаки на момент прогноза. `predict_proba` -> P(up);
+    `decision_return` -> псевдо-доходность `p - 0.5` (знак = направленная ставка),
+    что позволяет встроить классификатор в общий OOF-конвейер и экономический бэктест.
+    """
+
+    def __init__(self, arch: str = 'GRU', target_col: str = 'BTC_logret',
+                 feature_cols: Optional[list] = None, window_size: int = 10,
+                 hp: Optional[dict] = None, lr: float = 1e-3, epochs: int = 20,
+                 batch_size: int = 32, patience: int = 8, val_frac: float = 0.2,
+                 seed: int = 42, device: str = DEVICE, weight_decay: float = 0.0,
+                 weight_power: float = 1.0, weight_floor: float = 0.05, grad_clip: float = 1.0):
+        self.arch = arch
+        self.target_col = target_col
+        self.feature_cols = feature_cols
+        self.window_size = window_size
+        self.hp = hp
+        self.lr = lr
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.patience = patience
+        self.val_frac = val_frac
+        self.seed = seed
+        self.device = device
+        self.weight_decay = weight_decay
+        self.weight_power = weight_power
+        self.weight_floor = weight_floor
+        self.grad_clip = grad_clip
+
+    def _make_windows(self, X: pd.DataFrame):
+        ret = X[self.target_col].to_numpy(dtype=float)
+        exog = X[self.feature_cols].to_numpy(dtype=float)
+        X_seq, X_ex, y_cls, mag = [], [], [], []
+        for i in range(len(ret) - self.window_size):
+            X_seq.append(ret[i:i + self.window_size].reshape(self.window_size, 1))
+            X_ex.append(exog[i + self.window_size])
+            r = ret[i + self.window_size]
+            y_cls.append(1.0 if r > 0 else 0.0)
+            mag.append(abs(r))
+        index = X.index[self.window_size:]
+        return np.array(X_seq), np.array(X_ex), np.array(y_cls), np.array(mag), index
+
+    def fit(self, X: pd.DataFrame, y=None) -> 'CryptoNetClassifier':
+        if not self.feature_cols:
+            raise ValueError('feature_cols must be a non-empty list of column names')
+        if self.hp is None:
+            raise ValueError('hp must be set (see _sample_crypto_hparams)')
+
+        set_global_seed(self.seed)
+        X_seq, X_ex, y_cls, mag, _ = self._make_windows(X)
+        n = len(y_cls)
+        val_n = max(1, int(self.val_frac * n))
+        train_n = n - val_n
+        if train_n <= 0:
+            raise ValueError(f'not enough rows after windowing: n={n}, window_size={self.window_size}')
+
+        # Скейлеры обучаются только на трейн-части окна (без val-хвоста).
+        self.scaler_seq_ = RobustScaler().fit(X_seq[:train_n].reshape(-1, 1))
+        self.scaler_x_ = RobustScaler().fit(X_ex[:train_n])
+        X_seq_s = self.scaler_seq_.transform(X_seq.reshape(-1, 1)).reshape(X_seq.shape)
+        X_ex_s = self.scaler_x_.transform(X_ex)
+
+        # Веса наблюдений = |r|^power, нормированные к среднему по трейну, + пол:
+        # крупные движения весомее, но околонулевые наблюдения тоже немного участвуют.
+        w = np.power(mag, self.weight_power)
+        scale = w[:train_n].mean() or 1.0
+        w = w / scale + self.weight_floor
+
+        train_loader = _make_loader(X_seq_s[:train_n], X_ex_s[:train_n], y_cls[:train_n],
+                                    self.batch_size, shuffle=True, weights=w[:train_n])
+        val_loader = _make_loader(X_seq_s[train_n:], X_ex_s[train_n:], y_cls[train_n:],
+                                  self.batch_size, shuffle=False, weights=w[train_n:])
+
+        self.exog_dim_ = X_ex.shape[1]
+        model = CryptoNet(self.window_size, self.exog_dim_, self.arch, self.hp,
+                          output_activation='sigmoid').to(self.device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+        bce = nn.BCEWithLogitsLoss(reduction='none')
+
+        best_val = float('inf')
+        best_state = copy.deepcopy(model.state_dict())
+        patience_counter = 0
+        for _ in range(self.epochs):
+            model.train()
+            for xb_seq, xb_ex, yb, wb in train_loader:
+                xb_seq, xb_ex, yb, wb = (xb_seq.to(self.device), xb_ex.to(self.device),
+                                         yb.to(self.device), wb.to(self.device))
+                optimizer.zero_grad()
+                logit = model(xb_seq, xb_ex).squeeze(-1)
+                loss = (bce(logit, yb) * wb).mean()
+                loss.backward()
+                if self.grad_clip:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), self.grad_clip)
+                optimizer.step()
+
+            model.eval()
+            num, den = 0.0, 0.0
+            with torch.no_grad():
+                for xb_seq, xb_ex, yb, wb in val_loader:
+                    xb_seq, xb_ex, yb, wb = (xb_seq.to(self.device), xb_ex.to(self.device),
+                                             yb.to(self.device), wb.to(self.device))
+                    logit = model(xb_seq, xb_ex).squeeze(-1)
+                    num += (bce(logit, yb) * wb).sum().item()
+                    den += wb.sum().item()
+            val_metric = num / den if den > 0 else float('inf')
+            scheduler.step(val_metric)
+
+            if val_metric < best_val:
+                best_val = val_metric
+                best_state = copy.deepcopy(model.state_dict())
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= self.patience:
+                    break
+
+        model.load_state_dict(best_state)
+        self.model_ = model
+        self.best_val_score_ = best_val  # val weighted BCE (меньше -> лучше)
+        return self
+
+    def predict_proba(self, X: pd.DataFrame) -> pd.Series:
+        check_is_fitted(self, 'model_')
+        X_seq, X_ex, _, _, index = self._make_windows(X)
+        if len(index) == 0:
+            return pd.Series(dtype=float)
+        X_seq_s = self.scaler_seq_.transform(X_seq.reshape(-1, 1)).reshape(X_seq.shape)
+        X_ex_s = self.scaler_x_.transform(X_ex)
+        self.model_.eval()
+        with torch.no_grad():
+            logit = self.model_(
+                torch.tensor(X_seq_s, dtype=torch.float32).to(self.device),
+                torch.tensor(X_ex_s, dtype=torch.float32).to(self.device),
+            ).squeeze(-1)
+            p = torch.sigmoid(logit).cpu().numpy()
+        return pd.Series(p, index=index, name=f'{self.arch} (sign clf)')
+
+    def decision_return(self, X: pd.DataFrame) -> pd.Series:
+        """Псевдо-доходность `p - 0.5`: знак = направленная ставка (для OOF/бэктеста)."""
+        return self.predict_proba(X) - 0.5
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        return (self.predict_proba(X) > 0.5).astype(int)
 
 
 class NeuralForecaster:
