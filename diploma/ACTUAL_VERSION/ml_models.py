@@ -9,7 +9,8 @@ import random
 
 import matplotlib.pyplot as plt
 
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
@@ -63,6 +64,13 @@ def smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     `Symmetric Mean Absolute Percentage Error` -
     метрика качества, симметричное отношение к пере- и недопрогнозу
 
+    В отличие от классического MAPE, знаменатель берётся как средняя величина
+    |y_true| и |y_pred|, а не только |y_true|: это убирает асимметричный взрыв
+    ошибки при y_true -> 0 (когда модель недопрогнозирует около нулевой цены/
+    доходности) и ограничивает вклад каждого наблюдения сверху значением 2.
+    При den == 0 (оба значения равны нулю) вклад наблюдения принимается за 0,
+    а не NaN/inf.
+
     `y_true`: тагрет на тесте
     `y_pred`: предсказания на тесте
     """
@@ -86,10 +94,12 @@ def mase(y_true: np.ndarray, y_pred: np.ndarray, y_train: np.ndarray) -> float:
     `y_pred`: предсказания на тесте
     `y_train`: таргет на трейне
     """
-    return float(
-                np.mean(np.abs(y_true - y_pred)) / # ср. абс. ошибка предсказаний на тесте
-                np.mean(np.abs(np.diff(y_train)))  # ср. абс. ошибка наивного предсказания на трейне
-            )
+    scale = np.mean(np.abs(np.diff(y_train)))
+    # На вырожденном трейне (константный ряд, scale == 0) знаменатель не определён;
+    # возвращаем NaN, чтобы не протаскивать inf в Optuna objective/агрегаты.
+    if scale == 0 or np.isnan(scale):
+        return float('nan')
+    return float(np.mean(np.abs(y_true - y_pred)) / scale)
 
 
 def compute_metrics(
@@ -239,6 +249,12 @@ class LinearForecaster(ForecastBase, BaseEstimator):
             feature_pipe = Pipeline([('pre', pre), ('reg', base)])
             return TransformedTargetRegressor(regressor=feature_pipe, transformer=RobustScaler())
 
+        # TimeSeriesSplit разбивает только X_train/y_train (тестовый хвост уже
+        # отрезан выше) и не перемешивает порядок наблюдений, поэтому каждый
+        # CV-фолд тестируется на наблюдениях, строго следующих за его трейном.
+        # Импьютер/скейлер/трансформер таргета объявлены внутри Pipeline и
+        # TransformedTargetRegressor -> cross_val_score переобучает их на
+        # трейне каждого фолда отдельно (no look-ahead в препроцессинге).
         cv = TimeSeriesSplit(n_splits=self.cv_splits)
         scorer = make_scorer(smape, greater_is_better=False)
 
@@ -415,6 +431,10 @@ class StackingForecaster(ForecastBase, BaseEstimator):
                 transformer = RobustScaler()
             )
 
+        # Как и в LinearForecaster: CV выполняется только на X_train/y_train
+        # (тест отрезан выше), TimeSeriesSplit сохраняет временной порядок,
+        # препроцессинг (impute/scale) переобучается внутри ColumnTransformer
+        # на каждом фолде -> утечки информации из будущего нет.
         cv = TimeSeriesSplit(n_splits=self.cv_splits)
         scorer = make_scorer(smape, greater_is_better=False)
         knn_param_keys = build_model().get_params().keys()
@@ -518,7 +538,6 @@ class StackingForecaster(ForecastBase, BaseEstimator):
 
         self.log(f"{self.model_type} закончила обучаться")
 
-        # для сравнения проверяем метрики качества на трейн и тест данных
         self.y_pred_train = model.predict(X_train)
         self.y_pred_test = model.predict(X_test)
 
@@ -575,6 +594,11 @@ def smape_loss_torch(y_true: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor
     метрика качества, симметричное отношение к пере- и недопрогнозу
 
     посчитана с использованием PyTorch
+
+    `eps` добавлен непосредственно в знаменатель (а не как post-hoc `clamp`/`max`
+    после деления): это гарантирует, что функция остаётся гладкой и
+    дифференцируемой в точке y_true = y_pred = 0, где обычный SMAPE имеет 0/0.
+    При |y_true| + |y_pred| >> eps вклад eps пренебрежимо мал и не искажает метрику.
 
     `y_true`: тагрет на тесте
     `y_pred`: предсказания на тесте
@@ -804,6 +828,122 @@ def _train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoa
 
     model.load_state_dict(best_state)
     return model, best_val
+
+
+class CryptoNetRegressor(BaseEstimator, RegressorMixin):
+    """
+    Sklearn-совместимая (`fit`/`predict`) обёртка над `CryptoNet` для
+    `arch in {'LSTM', 'GRU', 'StackedLSTM', 'CNN_LSTM'}`, дающая боостинг- и
+    нейросетевым моделям общий интерфейс для одного walk-forward цикла и
+    единого `compute_metrics`.
+
+    `X` - DataFrame с `target_col` (исходная, нескейленная цена) и
+    `feature_cols` (экзогенные признаки), упорядоченный по времени без
+    пропусков. Окна строятся внутри `fit`/`predict`: `X_seq[i]` - это
+    `window_size` последовательных значений `target_col`, `X_ex[i]` -
+    экзогенные признаки в момент прогноза, целевая переменная - `target_col`
+    в той же точке (то есть `X.index[window_size:]`).
+
+    Каждый вызов `fit` создаёт новую `CryptoNet` и новые `RobustScaler`
+    (`scaler_y_`/`scaler_x_`), обученные только на тренировочной части `X`
+    (до `val_frac`-хвоста). Это принципиально для walk-forward: ни веса
+    модели, ни скейлеры, ни скрытое состояние RNN не переносятся между
+    независимыми окнами/фолдами.
+
+    Для `predict` на тестовом фолде в `X` нужно передать `window_size`
+    дополнительных строк истории перед первой целевой датой - иначе для неё
+    не из чего собрать `X_seq[0]`.
+    """
+
+    def __init__(self, arch: str = 'GRU', target_col: str = 'BTC',
+                 feature_cols: Optional[list] = None, window_size: int = 10,
+                 hp: Optional[dict] = None, lr: float = 1e-3, epochs: int = 20,
+                 batch_size: int = 32, patience: int = 5, val_frac: float = 0.2,
+                 seed: int = 42, device: str = DEVICE):
+        self.arch = arch
+        self.target_col = target_col
+        self.feature_cols = feature_cols
+        self.window_size = window_size
+        self.hp = hp
+        self.lr = lr
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.patience = patience
+        self.val_frac = val_frac
+        self.seed = seed
+        self.device = device
+
+    def _make_windows(self, X: pd.DataFrame):
+        y_raw = X[self.target_col].to_numpy(dtype=float)
+        exog_raw = X[self.feature_cols].to_numpy(dtype=float)
+
+        X_seq, X_ex, y_seq = [], [], []
+        for i in range(len(y_raw) - self.window_size):
+            X_seq.append(y_raw[i:i + self.window_size].reshape(self.window_size, 1))
+            X_ex.append(exog_raw[i + self.window_size])
+            y_seq.append(y_raw[i + self.window_size])
+
+        index = X.index[self.window_size:]
+        return np.array(X_seq), np.array(X_ex), np.array(y_seq), index
+
+    def fit(self, X: pd.DataFrame, y=None) -> 'CryptoNetRegressor':
+        if not self.feature_cols:
+            raise ValueError('feature_cols must be a non-empty list of column names')
+        if self.hp is None:
+            raise ValueError('hp must be set (see _sample_crypto_hparams)')
+
+        set_global_seed(self.seed)
+        X_seq, X_ex, y_seq, _ = self._make_windows(X)
+
+        n = len(y_seq)
+        val_n = max(1, int(self.val_frac * n))
+        train_n = n - val_n
+        if train_n <= 0:
+            raise ValueError(f'not enough rows after windowing for fit: n={n}, window_size={self.window_size}')
+
+        # Скейлеры обучаются только на тренировочной части окна (без val_frac-хвоста),
+        # чтобы early-stopping по валидации не подсматривал статистику будущих данных.
+        self.scaler_y_ = RobustScaler().fit(y_seq[:train_n].reshape(-1, 1))
+        self.scaler_x_ = RobustScaler().fit(X_ex[:train_n])
+
+        def scale_seq(arr):
+            return self.scaler_y_.transform(arr.reshape(-1, 1)).reshape(arr.shape)
+
+        X_seq_s = scale_seq(X_seq)
+        X_ex_s = self.scaler_x_.transform(X_ex)
+        y_s = self.scaler_y_.transform(y_seq.reshape(-1, 1)).flatten()
+
+        train_loader = _make_loader(X_seq_s[:train_n], X_ex_s[:train_n], y_s[:train_n], self.batch_size, shuffle=True)
+        val_loader = _make_loader(X_seq_s[train_n:], X_ex_s[train_n:], y_s[train_n:], self.batch_size, shuffle=False)
+
+        self.exog_dim_ = X_ex.shape[1]
+        # Свежая CryptoNet на каждый fit: веса/оптимизатор/скрытое состояние RNN
+        # не наследуются между walk-forward фолдами.
+        model = CryptoNet(self.window_size, self.exog_dim_, self.arch, self.hp)
+        self.model_, self.best_val_smape_ = _train_model(
+            model, train_loader, val_loader,
+            lr=self.lr, epochs=self.epochs, patience=self.patience, task='reg', device=self.device,
+        )
+        return self
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        check_is_fitted(self, 'model_')
+        X_seq, X_ex, _, index = self._make_windows(X)
+        if len(index) == 0:
+            return pd.Series(dtype=float)
+
+        X_seq_s = self.scaler_y_.transform(X_seq.reshape(-1, 1)).reshape(X_seq.shape)
+        X_ex_s = self.scaler_x_.transform(X_ex)
+
+        self.model_.eval()
+        with torch.no_grad():
+            preds_scaled = self.model_(
+                torch.tensor(X_seq_s, dtype=torch.float32).to(self.device),
+                torch.tensor(X_ex_s, dtype=torch.float32).to(self.device),
+            ).cpu().numpy().flatten()
+
+        preds = self.scaler_y_.inverse_transform(preds_scaled.reshape(-1, 1)).flatten()
+        return pd.Series(preds, index=index, name=f'{self.arch} (sequence NN)')
 
 
 class NeuralForecaster:

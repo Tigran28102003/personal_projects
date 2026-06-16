@@ -37,7 +37,11 @@ catboost==1.2.7
 lightgbm==4.6.0
 
 # ── Deep learning ─────────────────────────────────────────────
-torch                          # NeuralForecaster / NeuralClassifier (CryptoNet)
+torch                          # CryptoNet sequence models (LSTM/GRU/StackedLSTM/CNN_LSTM)
+captum>=0.6                    # Integrated Gradients attribution for CryptoNet (Phase 4 XAI)
+
+# ── Explainability ────────────────────────────────────────────
+shap>=0.46                     # TreeExplainer for GB models (requires numpy<2.0 with catboost)
 
 # ── Visualisation ─────────────────────────────────────────────
 matplotlib==3.10.1

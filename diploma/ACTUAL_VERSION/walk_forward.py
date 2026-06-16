@@ -1,288 +1,403 @@
 """
-Walk-forward expanding-window кросс-валидация для временных рядов.
+Walk-forward validation for BTC forecasting pipeline.
 
-Перенесено из `Bitcoin-price-prediction/src/models/walk_forward.py` (дипломная
-работа Ушкова Л.И., глава 5.3 / Table 6.2).
+Two split strategies (chosen by frequency):
+- `expanding_window_splits` - Daily: growing train set, fixed-length test blocks.
+- `rolling_window_splits`   - Hourly/5-min: fixed-width sliding train window.
+
+Window sizes are calibrated so that with per-fold Optuna retuning the total
+wall-clock time remains tractable:
+  daily  : 5 folds, ~500 rows minimum train / ~43 rows test (~2 months per fold).
+  hourly : 5 folds, ~3 000 rows train (~125 days) / ~600 rows test (~25 days).
+  5min   : 5 folds, ~2 400 rows train (~8 days) / ~600 rows test (~2 days).
+
+`run_walk_forward` orchestrates the full per-fold pipeline:
+  1. Slice train / test rows by integer position.
+  2. Select top-k |Pearson corr| features on train fold only (leakage-free).
+  3. Each model handles its own preprocessing internally:
+       GB  -> sklearn Pipeline (imputer + QuantileClipper + RobustScaler).
+       NN  -> CryptoNetRegressor.fit() (RobustScaler on train-before-val portion).
+  4. Run Optuna to retune hyperparameters (CV inside train fold, no test leakage).
+  5. Fit final model on full train fold; predict test fold.
+  6. Collect compute_metrics + raw OOF predictions.
+
+Returns (metrics_df, oof_df) - metrics_df is per-fold; oof_df is
+out-of-fold predictions concatenated across folds for economic simulation.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Any
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from typing import Callable, Optional
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import RobustScaler
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.metrics import make_scorer
 
-from eval_metrics import directional_accuracy
+from ml_models import (
+    smape,
+    compute_metrics,
+    run_optuna_study,
+    CryptoNetRegressor,
+    _sample_crypto_hparams,
+    set_global_seed,
+    DEVICE,
+)
 
 
-def walk_forward_cv(
-    model_factory: Callable[[], Any],
-    X: np.ndarray,
-    y: np.ndarray,
+# ---------------------------------------------------------------------------
+# Split generators
+# ---------------------------------------------------------------------------
+
+def expanding_window_splits(
+    n: int,
     n_splits: int = 5,
     min_train_frac: float = 0.5,
-    verbose: bool = True,
-    return_predictions: bool = False,
-) -> pd.DataFrame:
+) -> list[tuple[np.ndarray, np.ndarray]]:
     """
-    Expanding-window walk-forward кросс-валидация для моделей временных рядов.
+    Expanding-window folds for Daily data. Train set grows each fold; test block
+    is the next fixed-size chunk. `min_train_frac` sets how much of `n` the
+    first train set covers, leaving `(1 - min_train_frac) * n` rows for the
+    `n_splits` test blocks. Each test block is therefore
+    `floor((1 - min_train_frac) * n / n_splits)` rows.
 
-    Датасет делится на (n_splits + 1) непрерывных блоков. Первый блок
-    (min_train_frac от всех данных) формирует начальную обучающую выборку.
-    На каждом следующем фолде k обучающая выборка расширяется на один блок,
-    а следующий блок используется как тестовый.
-
-    Параметры
-    ---------
-    model_factory : функция без аргументов, возвращающая необученную модель
-                    с `.fit(X_train, y_train)` и `.predict(X_test)`.
-    X             : матрица признаков, shape (n_samples, n_features)
-    y             : вектор таргета, shape (n_samples,)
-    n_splits      : число walk-forward фолдов
-    min_train_frac: доля данных для начального обучающего окна
-    verbose       : печатать результаты по фолдам
-
-    Возвращает
-    ----------
-    pd.DataFrame с колонками [fold, train_size, test_size, MAE, RMSE, R2]
+    Returns list of (train_idx, test_idx) integer-position arrays.
     """
-    # Keep X/y in their original type (DataFrame/Series) so cloned sklearn
-    # pipelines using ColumnTransformer with named columns still work on each
-    # fold; a parallel ndarray view is used only for positional reference
-    # extraction below.
-    X_arr = np.asarray(X)
-    n = len(X_arr)
-
-    min_train = int(n * min_train_frac)
+    min_train = int(np.floor(min_train_frac * n))
     remaining = n - min_train
-    fold_size = remaining // n_splits
+    test_size = remaining // n_splits
 
-    records = []
-    for fold in range(n_splits):
-        train_end = min_train + fold * fold_size
-        test_start = train_end
-        test_end = test_start + fold_size
+    if test_size < 1:
+        raise ValueError(
+            f'Not enough rows for {n_splits} folds with min_train_frac={min_train_frac}: '
+            f'n={n}, remaining={remaining}'
+        )
 
+    splits = []
+    train_end = min_train
+    for _ in range(n_splits):
+        test_end = min(train_end + test_size, n)
+        splits.append((np.arange(train_end), np.arange(train_end, test_end)))
+        train_end = test_end
+        if train_end >= n:
+            break
+    return splits
+
+
+def rolling_window_splits(
+    n: int,
+    train_size: int,
+    test_size: int,
+    step: Optional[int] = None,
+    n_splits: int = 5,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    Rolling-window folds for Hourly/5-min data. Train window is fixed-width
+    (`train_size` rows) and slides forward by `step` rows each fold. If `step`
+    is None, it defaults to `test_size` (non-overlapping test blocks).
+
+    Returns list of (train_idx, test_idx) integer-position arrays.
+    """
+    if step is None:
+        step = test_size
+
+    splits = []
+    start = 0
+    while len(splits) < n_splits:
+        train_end = start + train_size
+        test_end = train_end + test_size
         if test_end > n:
-            test_end = n
+            break
+        splits.append((np.arange(start, train_end), np.arange(train_end, test_end)))
+        start += step
 
-        X_train, y_train = X[:train_end], y[:train_end]
-        X_test, y_test = X[test_start:test_end], y[test_start:test_end]
-        X_test_arr = X_arr[test_start:test_end]
-
-        model = model_factory()
-        model.fit(X_train, y_train)
-
-        y_pred = model.predict(X_test)
-
-        # LSTM возвращает меньше прогнозов из-за смещения seq_len
-        reference = None
-        if len(y_pred) < len(y_test):
-            offset = len(y_test) - len(y_pred)
-            if X_test_arr.ndim == 2 and X_test_arr.shape[1] > 0:
-                reference = X_test_arr[offset:, 0]
-            y_test = y_test[len(y_test) - len(y_pred):]
-        elif X_test_arr.ndim == 2 and X_test_arr.shape[1] > 0:
-            reference = X_test_arr[: len(y_pred), 0]
-
-        mae = mean_absolute_error(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        r2 = r2_score(y_test, y_pred)
-        direction_metrics = (
-            directional_accuracy(y_test, y_pred, reference)
-            if reference is not None
-            else {
-                "Directional Accuracy": np.nan,
-                "Precision Long": np.nan,
-                "Recall Long": np.nan,
-            }
+    if not splits:
+        raise ValueError(
+            f'No valid folds: n={n}, train_size={train_size}, test_size={test_size}'
         )
-
-        record = {
-            "fold": fold + 1,
-            "train_size": len(X_train),
-            "test_size": len(X_test),
-            "MAE": mae,
-            "RMSE": rmse,
-            "R2": r2,
-            **direction_metrics,
-        }
-        if return_predictions:
-            record["y_true"] = np.asarray(y_test, dtype=float)
-            record["y_pred"] = np.asarray(y_pred, dtype=float)
-            if reference is not None:
-                record["reference"] = np.asarray(reference, dtype=float)
-        records.append(record)
-
-        if verbose:
-            print(
-                f"Fold {fold + 1}/{n_splits} | "
-                f"train={len(X_train):>5d}  test={len(X_test):>5d} | "
-                f"MAE={mae:>8.2f}  RMSE={rmse:>8.2f}  R²={r2:.4f}  "
-                f"DA={direction_metrics['Directional Accuracy']:.3f}"
-            )
-
-    return pd.DataFrame(records)
+    return splits
 
 
-def walk_forward_summary(df: pd.DataFrame) -> pd.DataFrame:
+# ---------------------------------------------------------------------------
+# Leakage-safe feature selection and preprocessing utilities
+# ---------------------------------------------------------------------------
+
+class QuantileClipper:
+    """1st/99th percentile clipper — fit on train fold only."""
+
+    def __init__(self, lower: float = 0.01, upper: float = 0.99):
+        self.lower = lower
+        self.upper = upper
+
+    def fit(self, X: np.ndarray) -> 'QuantileClipper':
+        self.lower_bounds_ = np.nanquantile(X, self.lower, axis=0)
+        self.upper_bounds_ = np.nanquantile(X, self.upper, axis=0)
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        return np.clip(X, self.lower_bounds_, self.upper_bounds_)
+
+
+def select_top_k_features(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    k: int,
+) -> list[str]:
     """
-    Агрегирует результаты по фолдам: mean ± std по фолдам.
+    Top-k features by |Pearson correlation| with the target, computed on the
+    training fold only. Columns with all-NaN are excluded before ranking.
+    """
+    corrs = X_train.corrwith(y_train).abs().dropna()
+    return list(corrs.nlargest(k).index)
 
-    Параметры
-    ---------
-    df : результат `walk_forward_cv`
 
-    Возвращает
+def preprocess_fold(
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Fit median-imputer + 1st/99th clipper + RobustScaler on `X_train`;
+    apply all three fitted transformers to both splits.
+
+    Exposed as a standalone utility for external use (e.g. when a model does
+    not include its own preprocessing pipeline). The walk-forward loop itself
+    does NOT call this function: GB models carry sklearn Pipelines with
+    these steps, and CryptoNetRegressor fits its own RobustScaler internally.
+    """
+    cols = X_train.columns
+
+    imputer = SimpleImputer(strategy='median').fit(X_train)
+    Xtr = imputer.transform(X_train)
+    Xte = imputer.transform(X_test)
+
+    clipper = QuantileClipper().fit(Xtr)
+    Xtr = clipper.transform(Xtr)
+    Xte = clipper.transform(Xte)
+
+    scaler = RobustScaler().fit(Xtr)
+    Xtr = scaler.transform(Xtr)
+    Xte = scaler.transform(Xte)
+
+    return (
+        pd.DataFrame(Xtr, columns=cols, index=X_train.index),
+        pd.DataFrame(Xte, columns=cols, index=X_test.index),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Optuna objective factories
+# ---------------------------------------------------------------------------
+
+def _gb_objective(model_factory: Callable, X_train: pd.DataFrame, y_train: pd.Series):
+    """
+    Returns an Optuna objective for a GB sklearn-Pipeline factory.
+
+    Tunes `learning_rate` and `n_estimators`/`iterations`/`max_iter` for the
+    inner estimator; all structural hyperparameters (max_depth, num_leaves, etc.)
+    stay as specified in `model_factory`. CV uses TimeSeriesSplit(n_splits=3)
+    on the provided train fold — no test-set leakage by construction.
+    """
+    from sklearn.base import clone
+
+    def objective(trial):
+        model = model_factory()
+        step = model.named_steps['model']
+
+        if hasattr(step, 'learning_rate'):
+            model.set_params(
+                model__learning_rate=trial.suggest_float('lr', 0.01, 0.2, log=True)
+            )
+        for attr in ('n_estimators', 'iterations', 'max_iter'):
+            if hasattr(step, attr):
+                model.set_params(**{
+                    f'model__{attr}': trial.suggest_int('n_est', 100, 500, step=100)
+                })
+
+        cv = TimeSeriesSplit(n_splits=3)
+        scorer = make_scorer(smape, greater_is_better=False)
+        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scorer, n_jobs=1)
+        return -float(np.mean(scores))
+
+    return objective
+
+
+def _nn_objective(
+    arch: str,
+    seq_train_df: pd.DataFrame,
+    feature_cols: list[str],
+    window_size: int,
+    epochs: int,
+    batch_size: int,
+    seed: int,
+):
+    """Returns an Optuna objective for one CryptoNet architecture."""
+    def objective(trial):
+        hp = _sample_crypto_hparams(trial, arch, window_size)
+        lr = hp.pop('learning_rate')
+        reg = CryptoNetRegressor(
+            arch=arch,
+            target_col='BTC',
+            feature_cols=feature_cols,
+            window_size=window_size,
+            hp=hp,
+            lr=lr,
+            epochs=epochs,
+            batch_size=batch_size,
+            patience=5,
+            seed=seed,
+        )
+        reg.fit(seq_train_df)
+        return reg.best_val_smape_
+    return objective
+
+
+# ---------------------------------------------------------------------------
+# Walk-forward engine
+# ---------------------------------------------------------------------------
+
+def run_walk_forward(
+    model_family: str,
+    model_name: str,
+    df: pd.DataFrame,
+    target_col: str,
+    all_feature_cols: list[str],
+    splits: list[tuple[np.ndarray, np.ndarray]],
+    top_k: int,
+    optuna_n_trials: int,
+    nn_config: Optional[dict] = None,
+    gb_model_factory: Optional[Callable] = None,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Walk-forward loop for one model (GB or NN).
+
+    Parameters
     ----------
-    DataFrame из одной строки с колонками MAE_mean, MAE_std, RMSE_mean,
-    RMSE_std, R2_mean, R2_std, DA_mean, PrecisionLong_mean, RecallLong_mean.
+    model_family     : 'GB' or 'NN'
+    model_name       : display name, e.g. 'LightGBM' or 'GRU (sequence NN)'
+    df               : full raw per-frequency DataFrame (includes `target_col`)
+    target_col       : column to forecast, 'BTC'
+    all_feature_cols : candidate feature pool; top_k selected per fold
+    splits           : (train_idx, test_idx) arrays from split generator functions
+    top_k            : features to keep per fold by |Pearson| ranking
+    optuna_n_trials  : Optuna trials per fold
+    nn_config        : {'window_size', 'epochs', 'batch_size'} (NN only)
+    gb_model_factory : zero-arg callable returning a fresh sklearn Pipeline (GB only)
+    seed             : master RNG seed; fold i uses seed + i
+
+    Returns
+    -------
+    metrics_df : per-fold metrics (fold, model, MAE, RMSE, SMAPE, MASE, n_train, n_test)
+    oof_df     : OOF predictions (timestamp, actual, predicted, fold, model)
     """
-    summary = {
-        "MAE_mean": df["MAE"].mean(),
-        "MAE_std": df["MAE"].std(),
-        "RMSE_mean": df["RMSE"].mean(),
-        "RMSE_std": df["RMSE"].std(),
-        "R2_mean": df["R2"].mean(),
-        "R2_std": df["R2"].std(),
-        "DA_mean": df["Directional Accuracy"].mean(),
-        "PrecisionLong_mean": df["Precision Long"].mean(),
-        "RecallLong_mean": df["Recall Long"].mean(),
-    }
-    return pd.DataFrame([summary])
+    if model_family not in ('GB', 'NN'):
+        raise ValueError(f'model_family must be "GB" or "NN", got {model_family!r}')
 
+    metrics_rows = []
+    oof_rows = []
 
-def walk_forward_naive_baseline(
-    series: np.ndarray,
-    horizon: int = 1,
-    n_splits: int = 5,
-    min_train_frac: float = 0.5,
-) -> pd.DataFrame:
-    series = np.asarray(series, dtype=float).reshape(-1)
-    n = len(series)
+    for fold_idx, (train_idx, test_idx) in enumerate(splits):
+        fold_seed = seed + fold_idx
 
-    min_train = int(n * min_train_frac)
-    remaining = n - min_train
-    fold_size = remaining // n_splits
+        df_train = df.iloc[train_idx]
+        df_test = df.iloc[test_idx]
+        y_train = df_train[target_col]
+        y_test = df_test[target_col]
 
-    records = []
-    for fold in range(n_splits):
-        train_end = min_train + fold * fold_size
-        test_start = train_end
-        test_end = min(test_start + fold_size, n)
+        # Top-k feature selection on train fold only (Pearson |corr| with target)
+        selected = select_top_k_features(df_train[all_feature_cols], y_train, k=top_k)
 
-        test_series = series[test_start:test_end]
-        if len(test_series) <= horizon:
-            continue
+        if model_family == 'GB':
+            X_train = df_train[selected]
+            X_test = df_test[selected]
 
-        y_true = test_series[horizon:]
-        y_pred = test_series[:-horizon]
-        reference = test_series[:-horizon]
-
-        mae = mean_absolute_error(y_true, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-        r2 = r2_score(y_true, y_pred)
-        direction_metrics = directional_accuracy(y_true, y_pred, reference)
-
-        records.append(
-            {
-                "fold": fold + 1,
-                "train_size": train_end,
-                "test_size": len(test_series),
-                "MAE": mae,
-                "RMSE": rmse,
-                "R2": r2,
-                **direction_metrics,
-                "y_true": y_true,
-                "y_pred": y_pred,
-                "reference": reference,
-            }
-        )
-
-    return pd.DataFrame(records)
-
-
-def walk_forward_price_model(
-    model_factory: Callable[[], Any],
-    prices: np.ndarray,
-    horizon: int = 10,
-    n_splits: int = 5,
-    min_train_frac: float = 0.5,
-    dt: float = 1.0,
-    verbose: bool = True,
-    return_predictions: bool = False,
-) -> pd.DataFrame:
-    """
-    Expanding-window walk-forward валидация для моделей, обучаемых
-    непосредственно на 1D серии цен (SDE / Hybrid SDE-ML).
-
-    Ожидаемый интерфейс:
-        model.fit(train_prices, dt=dt)
-        model.predict_point(eval_prices, horizon=horizon, dt=dt)
-    """
-    prices = np.asarray(prices, dtype=float).reshape(-1)
-    n = len(prices)
-
-    min_train = int(n * min_train_frac)
-    remaining = n - min_train
-    fold_size = remaining // n_splits
-
-    records = []
-    for fold in range(n_splits):
-        train_end = min_train + fold * fold_size
-        test_start = train_end
-        test_end = min(test_start + fold_size, n)
-
-        train_prices = prices[:train_end]
-        eval_prices = prices[test_start:test_end]
-        if len(eval_prices) <= horizon:
-            continue
-
-        model = model_factory()
-        model.fit(train_prices, dt=dt)
-
-        if hasattr(model, "predict_point"):
-            y_pred = model.predict_point(eval_prices, horizon=horizon, dt=dt)
-            lag = getattr(model, "n_lag_returns", 0)
-            y_true = eval_prices[lag + horizon : lag + horizon + len(y_pred)]
-            reference = eval_prices[lag : lag + len(y_pred)]
-        else:
-            raise AttributeError("price model must expose predict_point(...) for walk-forward evaluation")
-
-        if len(y_true) == 0 or len(y_pred) == 0:
-            continue
-
-        n_common = min(len(y_true), len(y_pred), len(reference))
-        y_true = y_true[:n_common]
-        y_pred = y_pred[:n_common]
-        reference = reference[:n_common]
-
-        mae = mean_absolute_error(y_true, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-        r2 = r2_score(y_true, y_pred)
-        direction_metrics = directional_accuracy(y_true, y_pred, reference)
-
-        record = {
-            "fold": fold + 1,
-            "train_size": len(train_prices),
-            "test_size": len(eval_prices),
-            "MAE": mae,
-            "RMSE": rmse,
-            "R2": r2,
-            **direction_metrics,
-        }
-        if return_predictions:
-            record["y_true"] = np.asarray(y_true, dtype=float)
-            record["y_pred"] = np.asarray(y_pred, dtype=float)
-            record["reference"] = np.asarray(reference, dtype=float)
-        records.append(record)
-
-        if verbose:
-            print(
-                f"Fold {fold + 1}/{n_splits} | "
-                f"train={len(train_prices):>5d}  test={len(eval_prices):>5d} | "
-                f"MAE={mae:>8.2f}  RMSE={rmse:>8.2f}  R²={r2:.4f}  "
-                f"DA={direction_metrics['Directional Accuracy']:.3f}"
+            # Optuna tunes lr + n_estimators inside a TimeSeriesSplit on train fold
+            study = run_optuna_study(
+                _gb_objective(gb_model_factory, X_train, y_train),
+                direction='minimize',
+                n_trials=optuna_n_trials,
+                seed=fold_seed,
+                study_name=f'{model_name}_fold{fold_idx}',
             )
 
-    return pd.DataFrame(records)
+            best = gb_model_factory()
+            step = best.named_steps['model']
+            bp = study.best_params
+            if 'lr' in bp and hasattr(step, 'learning_rate'):
+                best.set_params(model__learning_rate=bp['lr'])
+            for attr in ('n_estimators', 'iterations', 'max_iter'):
+                if 'n_est' in bp and hasattr(step, attr):
+                    best.set_params(**{f'model__{attr}': bp['n_est']})
+
+            best.fit(X_train, y_train)
+            y_pred = pd.Series(best.predict(X_test), index=y_test.index)
+
+        else:  # NN
+            window_size = nn_config['window_size']
+            epochs = nn_config['epochs']
+            batch_size = nn_config['batch_size']
+            arch = model_name.split()[0]   # 'GRU (sequence NN)' -> 'GRU'
+
+            seq_cols = selected + [target_col]
+            seq_train_df = df_train[seq_cols]
+
+            # Prepend `window_size` history rows before test block so the first
+            # test-fold window has a complete lookback sequence.
+            hist_start = max(0, int(train_idx[-1]) + 1 - window_size)
+            seq_test_df = df.iloc[hist_start : int(test_idx[-1]) + 1][seq_cols]
+
+            study = run_optuna_study(
+                _nn_objective(arch, seq_train_df, selected, window_size, epochs, batch_size, fold_seed),
+                direction='minimize',
+                n_trials=optuna_n_trials,
+                seed=fold_seed,
+                study_name=f'{model_name}_fold{fold_idx}',
+            )
+
+            best_params = dict(study.best_params)
+            lr = best_params.pop('learning_rate')
+            set_global_seed(fold_seed)
+            reg = CryptoNetRegressor(
+                arch=arch,
+                target_col=target_col,
+                feature_cols=selected,
+                window_size=window_size,
+                hp=best_params,
+                lr=lr,
+                epochs=epochs,
+                batch_size=batch_size,
+                patience=5,
+                seed=fold_seed,
+                device=DEVICE,
+            )
+            reg.fit(seq_train_df)
+            y_pred = reg.predict(seq_test_df)
+
+        y_pred_aligned = y_pred.reindex(y_test.index)
+        metrics = compute_metrics(
+            y_true=y_test.to_numpy(dtype=float),
+            y_pred=y_pred_aligned.to_numpy(dtype=float),
+            y_train=y_train.to_numpy(dtype=float),
+        )
+        metrics_rows.append({
+            'fold': fold_idx,
+            'model': model_name,
+            'MAE': metrics['mae'],
+            'RMSE': metrics['rmse'],
+            'SMAPE': metrics['smape'],
+            'MASE': metrics['mase'],
+            'n_train': len(train_idx),
+            'n_test': len(test_idx),
+        })
+        oof_rows.append(pd.DataFrame({
+            'timestamp': y_test.index,
+            'actual': y_test.to_numpy(dtype=float),
+            'predicted': y_pred_aligned.to_numpy(dtype=float),
+            'fold': fold_idx,
+            'model': model_name,
+        }))
+
+    metrics_df = pd.DataFrame(metrics_rows)
+    oof_df = pd.concat(oof_rows, ignore_index=True) if oof_rows else pd.DataFrame()
+    return metrics_df, oof_df
