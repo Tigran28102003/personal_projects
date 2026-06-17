@@ -45,11 +45,16 @@ import wandb
 
 from sklearn.exceptions import ConvergenceWarning
 import warnings
+
+# T0.1: НЕ глушим предупреждения сплошным filterwarnings('ignore') — раньше это
+# скрывало диагностику, важную для финансового пайплайна (деление на ноль в
+# метриках, ConvergenceWarning от линейных моделей, потерю точности). Оставляем
+# только точечные фильтры по конкретным категориям/сообщениям, которые заведомо
+# безвредны и лишь шумят в логах.
 warnings.filterwarnings('ignore', category=ConvergenceWarning)
-warnings.filterwarnings('ignore')
 warnings.filterwarnings(
     action="ignore",
-    message="X has feature names, but KNeighborsRegressor was fitted without feature names"
+    message="X has feature names, but KNeighborsRegressor was fitted without feature names",
 )
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -907,7 +912,8 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
                  feature_cols: Optional[list] = None, window_size: int = 10,
                  hp: Optional[dict] = None, lr: float = 1e-3, epochs: int = 20,
                  batch_size: int = 32, patience: int = 5, val_frac: float = 0.2,
-                 seed: int = 42, device: str = DEVICE, weight_decay: float = 0.0):
+                 seed: int = 42, device: str = DEVICE, weight_decay: float = 0.0,
+                 optuna_val_frac: float = 0.0):
         self.arch = arch
         self.target_col = target_col
         self.feature_cols = feature_cols
@@ -919,6 +925,12 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
         self.batch_size = batch_size
         self.patience = patience
         self.val_frac = val_frac
+        # optuna_val_frac > 0 -> fit карвит ДОПОЛНИТЕЛЬНЫЙ held-out срез в самом
+        # конце окна (схема train / es-val / optuna-val), и best_val_score_ =
+        # метрика на нём, а НЕ на es-val. Это разносит выбор гиперпараметров
+        # (Optuna) и early stopping на разные срезы (фикс C3 / T2.4). При 0.0
+        # (по умолчанию, для финального production-фита) поведение прежнее: 80/20.
+        self.optuna_val_frac = optuna_val_frac
         self.seed = seed
         self.device = device
 
@@ -945,13 +957,16 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
         X_seq, X_ex, y_seq, _ = self._make_windows(X)
 
         n = len(y_seq)
-        val_n = max(1, int(self.val_frac * n))
-        train_n = n - val_n
+        val_n = max(1, int(self.val_frac * n))            # es-val (early stopping)
+        opt_n = int(self.optuna_val_frac * n) if self.optuna_val_frac > 0 else 0
+        train_n = n - val_n - opt_n
         if train_n <= 0:
             raise ValueError(f'not enough rows after windowing for fit: n={n}, window_size={self.window_size}')
+        es_end = train_n + val_n                          # граница es-val; [es_end:] = optuna-val
 
-        # Скейлеры обучаются только на тренировочной части окна (без val_frac-хвоста),
-        # чтобы early-stopping по валидации не подсматривал статистику будущих данных.
+        # Скейлеры обучаются только на тренировочной части окна (без val/opt-хвостов),
+        # чтобы ни early-stopping, ни Optuna-objective не подсматривали статистику
+        # будущих данных.
         self.scaler_y_ = RobustScaler().fit(y_seq[:train_n].reshape(-1, 1))
         self.scaler_x_ = RobustScaler().fit(X_ex[:train_n])
 
@@ -963,19 +978,32 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
         y_s = self.scaler_y_.transform(y_seq.reshape(-1, 1)).flatten()
 
         train_loader = _make_loader(X_seq_s[:train_n], X_ex_s[:train_n], y_s[:train_n], self.batch_size, shuffle=True)
-        val_loader = _make_loader(X_seq_s[train_n:], X_ex_s[train_n:], y_s[train_n:], self.batch_size, shuffle=False)
+        # early-stopping строго на es-val [train_n:es_end] — БЕЗ optuna-val хвоста.
+        val_loader = _make_loader(X_seq_s[train_n:es_end], X_ex_s[train_n:es_end], y_s[train_n:es_end], self.batch_size, shuffle=False)
 
         self.exog_dim_ = X_ex.shape[1]
         # Свежая CryptoNet на каждый fit: веса/оптимизатор/скрытое состояние RNN
         # не наследуются между walk-forward фолдами.
         model = CryptoNet(self.window_size, self.exog_dim_, self.arch, self.hp)
-        self.model_, self.best_val_score_ = _train_model(
+        self.model_, self.best_es_val_score_ = _train_model(
             model, train_loader, val_loader,
             lr=self.lr, epochs=self.epochs, patience=self.patience, task='reg', device=self.device,
             weight_decay=self.weight_decay,
         )
-        # Метрика отбора/early-stopping теперь val MAE (раньше val SMAPE); алиас оставлен
-        # для обратной совместимости с кодом, читавшим best_val_smape_.
+        # best_val_score_ — метрика для выбора гиперпараметров Optuna. Если выделен
+        # отдельный optuna-val срез (opt_n>0) — считаем val MAE на нём (в скейленном
+        # пространстве, как в _train_model); иначе fallback на es-val метрику.
+        if opt_n > 0:
+            self.model_.eval()
+            with torch.no_grad():
+                pred_opt = self.model_(
+                    torch.tensor(X_seq_s[es_end:], dtype=torch.float32).to(self.device),
+                    torch.tensor(X_ex_s[es_end:], dtype=torch.float32).to(self.device),
+                ).squeeze(-1).cpu().numpy()
+            self.best_val_score_ = float(np.mean(np.abs(y_s[es_end:] - pred_opt)))
+        else:
+            self.best_val_score_ = self.best_es_val_score_
+        # Алиас оставлен для обратной совместимости с кодом, читавшим best_val_smape_.
         self.best_val_smape_ = self.best_val_score_
         return self
 
@@ -999,6 +1027,30 @@ class CryptoNetRegressor(BaseEstimator, RegressorMixin):
         return pd.Series(preds, index=index, name=f'{self.arch} (sequence NN)')
 
 
+def focal_mw_bce(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    weight: torch.Tensor,
+    gamma: float = 2.0,
+) -> torch.Tensor:
+    """Focal + magnitude-weighted BCE для классификатора знака доходности (T3.3).
+
+    Объединяет фокальную модуляцию (Lin et al., 2017, *Focal Loss*) с уже
+    используемым взвешиванием по величине движения. `weight` — пер-семпл вес `|r|`
+    (нормирован к среднему трейна + пол `weight_floor`), `gamma` — фокусирующий
+    параметр: множитель ``(1 − p_t)^γ`` даунвейтит «лёгкие» (уверенно верные) бары
+    и переносит вес на трудные разворотные/крупные. При ``gamma == 0`` точно
+    сводится к прежней взвешенной BCE.
+
+    Все три тензора одномерны и одинаковой длины; `targets` ∈ {0, 1}.
+    """
+    log_pt = -nn.functional.binary_cross_entropy_with_logits(
+        logits, targets, reduction='none'
+    )                                          # = log(p_t), численно стабильно
+    focal = (1.0 - log_pt.exp()).pow(gamma)    # (1 − p_t)^γ
+    return -(weight * focal * log_pt).mean()
+
+
 class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
     """
     Классификатор ЗНАКА следующей доходности (вверх/вниз) на базе CryptoNet.
@@ -1006,10 +1058,12 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
     Зачем отдельно от CryptoNetRegressor: регрессия минимизирует ошибку ВЕЛИЧИНЫ
     (MSE/Huber), а её оптимум на почти непредсказуемом ряду с нулевым средним -
     предсказывать ~0, что даёт Directional Accuracy ≈ 0.5. Здесь цель ставится
-    напрямую как бинарная `y = 1[r_t > 0]`, а лосс - ВЗВЕШЕННАЯ BCE с весом `|r_t|`
-    (нормирован к среднему по трейну + небольшой пол `weight_floor`): крупные
-    движения важнее, шумовые околонулевые «перевороты знака» почти не штрафуются.
-    Так обучение выравнивается с целевой метрикой DA.
+    напрямую как бинарная `y = 1[r_t > 0]`, а лосс - FOCAL + magnitude-weighted BCE
+    (`focal_mw_bce`, T3.3): вес `|r_t|` (нормирован к среднему по трейну + небольшой
+    пол `weight_floor`) делает крупные движения важнее, а фокальный множитель
+    ``(1−p_t)^γ`` (`gamma`, по умолчанию 2.0) дополнительно даунвейтит «лёгкие» бары
+    и фокусирует обучение на трудных разворотных. При `gamma=0` сводится к прежней
+    взвешенной BCE. Так обучение выравнивается с целевой метрикой DA.
 
     Окна как в регрессоре: `x_seq` - window_size прошлых доходностей, `x_ex` -
     экзогенные признаки на момент прогноза. `predict_proba` -> P(up);
@@ -1022,7 +1076,8 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
                  hp: Optional[dict] = None, lr: float = 1e-3, epochs: int = 20,
                  batch_size: int = 32, patience: int = 8, val_frac: float = 0.2,
                  seed: int = 42, device: str = DEVICE, weight_decay: float = 0.0,
-                 weight_power: float = 1.0, weight_floor: float = 0.05, grad_clip: float = 1.0):
+                 weight_power: float = 1.0, weight_floor: float = 0.05, grad_clip: float = 1.0,
+                 gamma: float = 2.0, optuna_val_frac: float = 0.0):
         self.arch = arch
         self.target_col = target_col
         self.feature_cols = feature_cols
@@ -1033,12 +1088,16 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
         self.batch_size = batch_size
         self.patience = patience
         self.val_frac = val_frac
+        # См. CryptoNetRegressor: optuna_val_frac>0 выделяет отдельный held-out
+        # срез для Optuna-objective, разнося его с es-val (фикс C3 / T2.4).
+        self.optuna_val_frac = optuna_val_frac
         self.seed = seed
         self.device = device
         self.weight_decay = weight_decay
         self.weight_power = weight_power
         self.weight_floor = weight_floor
         self.grad_clip = grad_clip
+        self.gamma = gamma   # фокусирующий параметр focal-loss (T3.3)
 
     def _make_windows(self, X: pd.DataFrame):
         ret = X[self.target_col].to_numpy(dtype=float)
@@ -1062,12 +1121,14 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
         set_global_seed(self.seed)
         X_seq, X_ex, y_cls, mag, _ = self._make_windows(X)
         n = len(y_cls)
-        val_n = max(1, int(self.val_frac * n))
-        train_n = n - val_n
+        val_n = max(1, int(self.val_frac * n))            # es-val (early stopping)
+        opt_n = int(self.optuna_val_frac * n) if self.optuna_val_frac > 0 else 0
+        train_n = n - val_n - opt_n
         if train_n <= 0:
             raise ValueError(f'not enough rows after windowing: n={n}, window_size={self.window_size}')
+        es_end = train_n + val_n                          # граница es-val; [es_end:] = optuna-val
 
-        # Скейлеры обучаются только на трейн-части окна (без val-хвоста).
+        # Скейлеры обучаются только на трейн-части окна (без val/opt-хвостов).
         self.scaler_seq_ = RobustScaler().fit(X_seq[:train_n].reshape(-1, 1))
         self.scaler_x_ = RobustScaler().fit(X_ex[:train_n])
         X_seq_s = self.scaler_seq_.transform(X_seq.reshape(-1, 1)).reshape(X_seq.shape)
@@ -1081,14 +1142,18 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
 
         train_loader = _make_loader(X_seq_s[:train_n], X_ex_s[:train_n], y_cls[:train_n],
                                     self.batch_size, shuffle=True, weights=w[:train_n])
-        val_loader = _make_loader(X_seq_s[train_n:], X_ex_s[train_n:], y_cls[train_n:],
-                                  self.batch_size, shuffle=False, weights=w[train_n:])
+        # early-stopping строго на es-val [train_n:es_end] — без optuna-val хвоста.
+        val_loader = _make_loader(X_seq_s[train_n:es_end], X_ex_s[train_n:es_end], y_cls[train_n:es_end],
+                                  self.batch_size, shuffle=False, weights=w[train_n:es_end])
 
         self.exog_dim_ = X_ex.shape[1]
         model = CryptoNet(self.window_size, self.exog_dim_, self.arch, self.hp,
                           output_activation='sigmoid').to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+        # Обучение — на focal+magnitude-weighted BCE (T3.3). `bce` ниже остаётся
+        # только для МОНИТОРА на val (early stopping / Optuna): стабильная
+        # взвешенная BCE как сигнал отбора, не зависящий от gamma.
         bce = nn.BCEWithLogitsLoss(reduction='none')
 
         best_val = float('inf')
@@ -1101,7 +1166,7 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
                                          yb.to(self.device), wb.to(self.device))
                 optimizer.zero_grad()
                 logit = model(xb_seq, xb_ex).squeeze(-1)
-                loss = (bce(logit, yb) * wb).mean()
+                loss = focal_mw_bce(logit, yb, wb, gamma=self.gamma)
                 loss.backward()
                 if self.grad_clip:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), self.grad_clip)
@@ -1130,7 +1195,24 @@ class CryptoNetClassifier(BaseEstimator, ClassifierMixin):
 
         model.load_state_dict(best_state)
         self.model_ = model
-        self.best_val_score_ = best_val  # val weighted BCE (меньше -> лучше)
+        self.best_es_val_score_ = best_val  # es-val weighted BCE (меньше -> лучше)
+        # best_val_score_ для Optuna: на отдельном optuna-val срезе, если выделен
+        # (разносит выбор гиперпараметров с early-stopping, T2.4); иначе es-val.
+        if opt_n > 0:
+            opt_val_loader = _make_loader(X_seq_s[es_end:], X_ex_s[es_end:], y_cls[es_end:],
+                                          self.batch_size, shuffle=False, weights=w[es_end:])
+            model.eval()
+            num, den = 0.0, 0.0
+            with torch.no_grad():
+                for xb_seq, xb_ex, yb, wb in opt_val_loader:
+                    xb_seq, xb_ex, yb, wb = (xb_seq.to(self.device), xb_ex.to(self.device),
+                                             yb.to(self.device), wb.to(self.device))
+                    logit = model(xb_seq, xb_ex).squeeze(-1)
+                    num += (bce(logit, yb) * wb).sum().item()
+                    den += wb.sum().item()
+            self.best_val_score_ = num / den if den > 0 else float('inf')
+        else:
+            self.best_val_score_ = best_val
         return self
 
     def predict_proba(self, X: pd.DataFrame) -> pd.Series:

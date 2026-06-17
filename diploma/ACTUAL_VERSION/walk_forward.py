@@ -32,11 +32,11 @@ import pandas as pd
 from typing import Callable, Optional
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import RobustScaler
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.metrics import make_scorer, roc_auc_score
+from sklearn.metrics import roc_auc_score
 
+from validation import PurgedKFold, cpcv_splits
+from metrics import rank_ic, net_cost_sharpe, mwda, mcc, balanced_accuracy
 from ml_models import (
-    smape,
     compute_metrics,
     run_optuna_study,
     CryptoNetRegressor,
@@ -156,6 +156,33 @@ def select_top_k_features(
     return list(corrs.nlargest(k).index)
 
 
+def select_best_by_composite(
+    agg: pd.DataFrame,
+    names,
+    by: tuple = ('IC_IR', 'NetSharpe', 'MWDA'),
+    tie_break: str = 'MASE',
+) -> pd.DataFrame:
+    """Composite model selection (EPIC 3, T3.1) — один победитель на частоту.
+
+    Ранжирует по кортежу `by` (по умолчанию IC IR -> net-of-cost Sharpe -> MWDA,
+    все по убыванию), tie-break `tie_break` по возрастанию (MASE). Заменяет выбор
+    по «голой» Directional Accuracy: DA игнорирует магнитуду движения и сравнивается
+    с неверным нулём 0.5 вместо base-rate.
+
+    `agg` — агрегированная по моделям таблица (одна строка на (frequency, model))
+    с колонками 'frequency', 'model', метриками `by` и `tie_break`. `names` —
+    подмножество моделей-кандидатов (например, только GB или только NN).
+    Возвращает по одной строке-победителю на каждую частоту.
+    """
+    sub = agg[agg['model'].isin(set(names))].copy()
+    if sub.empty:
+        return sub
+    sort_cols = ['frequency', *by, tie_break]
+    ascending = [True, *([False] * len(by)), True]
+    sub = sub.sort_values(sort_cols, ascending=ascending)
+    return sub.groupby('frequency', as_index=False).head(1).reset_index(drop=True)
+
+
 def preprocess_fold(
     X_train: pd.DataFrame,
     X_test: pd.DataFrame,
@@ -198,16 +225,63 @@ def preprocess_fold(
 # 5 эпохам обрывал обучение в шумовом минимуме.
 NN_PATIENCE = 8
 
-def _gb_objective(model_factory: Callable, X_train: pd.DataFrame, y_train: pd.Series):
-    """
-    Returns an Optuna objective for a GB sklearn-Pipeline factory.
+# Псевдонимы имён Optuna-параметров -> атрибутов эстиматора. Структурные параметры
+# совпадают по имени между Optuna и бустингом; только learning_rate сокращён до 'lr',
+# а 'n_est' распределяется на первый из n_estimators/iterations/max_iter.
+_GB_PARAM_ALIAS = {'lr': 'learning_rate'}
+_GB_N_EST_ATTRS = ('n_estimators', 'iterations', 'max_iter')
 
-    Tunes `learning_rate` and `n_estimators`/`iterations`/`max_iter` for the
-    inner estimator; all structural hyperparameters (max_depth, num_leaves, etc.)
-    stay as specified in `model_factory`. CV uses TimeSeriesSplit(n_splits=3)
-    on the provided train fold — no test-set leakage by construction.
+
+def _apply_gb_params(model, params: dict) -> None:
+    """Применить подобранные Optuna-параметры к свежему GB-Pipeline (refit).
+
+    Пропускает параметры, которых нет у конкретного бустинга (`hasattr` по
+    `named_steps['model']`), и распределяет 'n_est' на доступный счётчик деревьев.
+    Единый источник правды о маппинге для objective и refit (T3.2).
+    """
+    step = model.named_steps['model']
+    for name, value in params.items():
+        if name == 'n_est':
+            for attr in _GB_N_EST_ATTRS:
+                if hasattr(step, attr):
+                    model.set_params(**{f'model__{attr}': value})
+                    break
+            continue
+        attr = _GB_PARAM_ALIAS.get(name, name)
+        if hasattr(step, attr):
+            model.set_params(**{f'model__{attr}': value})
+
+
+def _gb_objective(
+    model_factory: Callable,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    horizon: int = 1,
+    n_splits: int = 3,
+    fee: float = 0.0014,
+):
+    """
+    Returns an Optuna objective for a GB sklearn-Pipeline factory (T3.2).
+
+    Объектив — **net-of-cost Sharpe** в пространстве доходностей: на каждом
+    PurgedKFold-тест-срезе ``side = sign(r̂)``, доходность стратегии после издержек
+    оборота считается `metrics.net_cost_sharpe(side, r_true, fee)`. Возвращает
+    ОТРИЦАТЕЛЬНЫЙ средний Sharpe по фолдам (вызов остаётся `direction='minimize'`).
+    Цена не нужна — всё в return-space.
+
+    Тюнится не только `lr` + счётчик деревьев, но и полный набор структурных
+    гиперпараметров там, где бустинг их экспонирует (`hasattr`): max_depth / depth /
+    num_leaves / min_child_samples / subsample / colsample_bytree / reg_lambda /
+    l2_regularization / l2_leaf_reg. `GB_HYPERPARAMS` остаются лишь стартовыми
+    дефолтами.
+
+    CV uses `PurgedKFold` (purge перекрывающихся меток + embargo) на train-фолде
+    вместо `TimeSeriesSplit` (T2.2). Embargo = max(horizon, 1% длины train-фолда).
     """
     from sklearn.base import clone
+
+    embargo = max(horizon, int(np.ceil(0.01 * len(X_train))))
+    cv = PurgedKFold(n_splits=n_splits, embargo=embargo, horizon=horizon)
 
     def objective(trial):
         model = model_factory()
@@ -215,18 +289,49 @@ def _gb_objective(model_factory: Callable, X_train: pd.DataFrame, y_train: pd.Se
 
         if hasattr(step, 'learning_rate'):
             model.set_params(
-                model__learning_rate=trial.suggest_float('lr', 0.01, 0.2, log=True)
+                model__learning_rate=trial.suggest_float('lr', 1e-3, 0.3, log=True)
             )
-        for attr in ('n_estimators', 'iterations', 'max_iter'):
+        for attr in _GB_N_EST_ATTRS:
             if hasattr(step, attr):
                 model.set_params(**{
-                    f'model__{attr}': trial.suggest_int('n_est', 100, 500, step=100)
+                    f'model__{attr}': trial.suggest_int('n_est', 100, 800, step=100)
                 })
+                break
 
-        cv = TimeSeriesSplit(n_splits=3)
-        scorer = make_scorer(smape, greater_is_better=False)
-        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring=scorer, n_jobs=1)
-        return -float(np.mean(scores))
+        # Структурные HP — подбираются только если эстиматор их поддерживает, чтобы
+        # study.best_params содержал ровно применимые ключи (и refit их применил).
+        if hasattr(step, 'max_depth'):
+            model.set_params(model__max_depth=trial.suggest_int('max_depth', 2, 8))
+        if hasattr(step, 'depth'):           # CatBoost
+            model.set_params(model__depth=trial.suggest_int('depth', 2, 8))
+        if hasattr(step, 'num_leaves'):      # LightGBM
+            model.set_params(model__num_leaves=trial.suggest_int('num_leaves', 15, 255))
+        if hasattr(step, 'min_child_samples'):
+            model.set_params(model__min_child_samples=trial.suggest_int('min_child_samples', 5, 80))
+        if hasattr(step, 'subsample'):
+            model.set_params(model__subsample=trial.suggest_float('subsample', 0.6, 1.0))
+        if hasattr(step, 'colsample_bytree'):
+            model.set_params(model__colsample_bytree=trial.suggest_float('colsample_bytree', 0.6, 1.0))
+        if hasattr(step, 'reg_lambda'):      # LightGBM / XGBoost
+            model.set_params(model__reg_lambda=trial.suggest_float('reg_lambda', 1e-3, 10.0, log=True))
+        if hasattr(step, 'l2_regularization'):   # HistGradientBoosting
+            model.set_params(model__l2_regularization=trial.suggest_float('l2_regularization', 1e-3, 10.0, log=True))
+        if hasattr(step, 'l2_leaf_reg'):     # CatBoost
+            model.set_params(model__l2_leaf_reg=trial.suggest_float('l2_leaf_reg', 1e-1, 10.0, log=True))
+
+        sharpes = []
+        for tr, te in cv.split(X_train):
+            if len(tr) == 0 or len(te) == 0:
+                continue
+            m = clone(model)
+            m.fit(X_train.iloc[tr], y_train.iloc[tr])
+            pred = np.asarray(m.predict(X_train.iloc[te]), dtype=float)
+            r_true = y_train.iloc[te].to_numpy(dtype=float)
+            sh = net_cost_sharpe(np.sign(pred), r_true, fee=fee)
+            if np.isfinite(sh):
+                sharpes.append(sh)
+        # Максимизируем Sharpe -> возвращаем минус среднего (direction='minimize').
+        return -float(np.mean(sharpes)) if sharpes else float('inf')
 
     return objective
 
@@ -240,8 +345,13 @@ def _nn_objective(
     batch_size: int,
     seed: int,
     target_col: str = 'BTC',
+    optuna_val_frac: float = 0.2,
 ):
-    """Returns an Optuna objective for one CryptoNet architecture."""
+    """Returns an Optuna objective for one CryptoNet architecture.
+
+    `optuna_val_frac>0` выделяет отдельный held-out срез для оценки трайла,
+    разнесённый с es-val (early stopping) — выбор гиперпараметров не переобучается
+    под тот же хвост, что и ранний останов (T2.4)."""
     def objective(trial):
         hp = _sample_crypto_hparams(trial, arch, window_size)
         lr = hp.pop('learning_rate')
@@ -258,6 +368,7 @@ def _nn_objective(
             patience=NN_PATIENCE,
             seed=seed,
             weight_decay=weight_decay,
+            optuna_val_frac=optuna_val_frac,
         )
         reg.fit(seq_train_df)
         return reg.best_val_score_
@@ -273,9 +384,11 @@ def _nn_clf_objective(
     batch_size: int,
     seed: int,
     target_col: str = 'BTC',
+    optuna_val_frac: float = 0.2,
 ):
     """Returns an Optuna objective for one CryptoNet sign-classifier architecture
-    (minimises validation weighted-BCE)."""
+    (minimises validation weighted-BCE). `optuna_val_frac>0` оценивает трайл на
+    отдельном held-out срезе, разнесённом с es-val (T2.4)."""
     def objective(trial):
         hp = _sample_crypto_hparams(trial, arch, window_size)
         lr = hp.pop('learning_rate')
@@ -284,6 +397,7 @@ def _nn_clf_objective(
             arch=arch, target_col=target_col, feature_cols=feature_cols,
             window_size=window_size, hp=hp, lr=lr, epochs=epochs,
             batch_size=batch_size, patience=NN_PATIENCE, seed=seed, weight_decay=weight_decay,
+            optuna_val_frac=optuna_val_frac,
         )
         clf.fit(seq_train_df)
         return clf.best_val_score_
@@ -331,7 +445,8 @@ def run_walk_forward(
 
     Returns
     -------
-    metrics_df : per-fold metrics (fold, model, MAE, RMSE, SMAPE, MASE, DA, AUC, n_train, n_test)
+    metrics_df : per-fold metrics (fold, model, MAE, RMSE, SMAPE, MASE, DA, RankIC,
+                 MWDA, MCC, BalAcc, AUC, n_train, n_test)
     oof_df     : OOF predictions (timestamp, actual, predicted, fold, model)
     """
     if model_family not in ('GB', 'NN', 'NN_CLF'):
@@ -357,12 +472,13 @@ def run_walk_forward(
             X_train = df_train[selected]
             X_test = df_test[selected]
 
-            # Optuna tunes lr + n_estimators inside a TimeSeriesSplit on train fold
-            # (only on retune folds; otherwise reuse the cached best params)
+            # Optuna tunes lr + tree count + full structural HP space by net-of-cost
+            # Sharpe inside a PurgedKFold (purge+embargo) on the train fold (T3.2).
+            # Runs only on retune folds; else reuse cached params.
             if cached_params is None or fold_idx % retune_every == 0:
                 study = run_optuna_study(
                     _gb_objective(gb_model_factory, X_train, y_train),
-                    direction='minimize',
+                    direction='minimize',   # objective returns -Sharpe
                     n_trials=optuna_n_trials,
                     seed=fold_seed,
                     study_name=f'{model_name}_fold{fold_idx}',
@@ -370,14 +486,7 @@ def run_walk_forward(
                 cached_params = dict(study.best_params)
 
             best = gb_model_factory()
-            step = best.named_steps['model']
-            bp = cached_params
-            if 'lr' in bp and hasattr(step, 'learning_rate'):
-                best.set_params(model__learning_rate=bp['lr'])
-            for attr in ('n_estimators', 'iterations', 'max_iter'):
-                if 'n_est' in bp and hasattr(step, attr):
-                    best.set_params(**{f'model__{attr}': bp['n_est']})
-
+            _apply_gb_params(best, cached_params)
             best.fit(X_train, y_train)
             y_pred = pd.Series(best.predict(X_test), index=y_test.index)
 
@@ -469,22 +578,33 @@ def run_walk_forward(
                 clf_auc = float(roc_auc_score(y_true_dir, proba[mask].to_numpy(dtype=float)))
 
         y_pred_aligned = y_pred.reindex(y_test.index)
-        metrics = compute_metrics(
-            y_true=y_test.to_numpy(dtype=float),
-            y_pred=y_pred_aligned.to_numpy(dtype=float),
-            y_train=y_train.to_numpy(dtype=float),
-        )
+        yt = y_test.to_numpy(dtype=float)
+        yp = y_pred_aligned.to_numpy(dtype=float)
+        metrics = compute_metrics(y_true=yt, y_pred=yp, y_train=y_train.to_numpy(dtype=float))
         is_clf = (model_family == 'NN_CLF')
+
+        # Композитные метрики селекции (EPIC 3): Rank IC и magnitude-weighted DA в
+        # return-space для всех моделей; MCC / balanced accuracy — только для
+        # классификатора знака (`yp` = proba−0.5 -> sign = ставка направления).
+        rankic_v = rank_ic(yt, yp)
+        mwda_v = mwda(yt, yp)
+        mcc_v = mcc(yt, yp) if is_clf else np.nan
+        balacc_v = balanced_accuracy(yt, yp) if is_clf else np.nan
+
         metrics_rows.append({
             'fold': fold_idx,
             'model': model_name,
             # Для классификатора метрики ВЕЛИЧИНЫ не определены (прогноз = вероятность),
-            # поэтому MAE/RMSE/SMAPE/MASE = NaN; содержательны DA и AUC.
+            # поэтому MAE/RMSE/SMAPE/MASE = NaN; содержательны DA / AUC / MCC / BalAcc.
             'MAE': np.nan if is_clf else metrics['mae'],
             'RMSE': np.nan if is_clf else metrics['rmse'],
             'SMAPE': np.nan if is_clf else metrics['smape'],
             'MASE': np.nan if is_clf else metrics['mase'],
             'DA': metrics['da'],
+            'RankIC': rankic_v,
+            'MWDA': mwda_v,
+            'MCC': mcc_v,
+            'BalAcc': balacc_v,
             'AUC': clf_auc,
             'n_train': len(train_idx),
             'n_test': len(test_idx),
@@ -500,3 +620,60 @@ def run_walk_forward(
     metrics_df = pd.DataFrame(metrics_rows)
     oof_df = pd.concat(oof_rows, ignore_index=True) if oof_rows else pd.DataFrame()
     return metrics_df, oof_df
+
+
+def run_cpcv_gb(
+    df: pd.DataFrame,
+    target_col: str,
+    all_feature_cols: list[str],
+    gb_model_factory: Callable,
+    top_k: int,
+    N: int = 6,
+    k: int = 2,
+    embargo_frac: float = 0.01,
+    horizon: int = 1,
+    fee: float = 0.0014,
+) -> pd.DataFrame:
+    """
+    CPCV-распределение метрик для GB-модели (опциональный режим, T2.3).
+
+    `run_walk_forward` остаётся production-simulation (один каузальный путь);
+    эта функция дополняет его комбинаторно-purged CV (AFML гл. 12): для каждого из
+    ``C(N, k)`` путей выполняется leakage-safe отбор top-k на train-части пути,
+    свежая GB-модель фитится и прогнозирует test-часть. Возвращает per-path
+    метрики (Rank IC, net-of-cost Sharpe, DA) — распределение по путям нужно для
+    **DSR/PBO** (EPIC 5/8): прогон множества путей, а не одной OOS-траектории.
+
+    Optuna здесь НЕ запускается — цель в распределении метрик при фиксированной
+    конфигурации, а не в тюнинге. NN-архитектуры не поддержаны: их
+    forward-history prepend несовместим с некаузальными CPCV-сплитами (train
+    может идти после test) — TODO интеграции на уровне P2/P3.
+
+    Returns
+    -------
+    DataFrame с колонками: path, rank_ic, net_cost_sharpe, da, n_train, n_test.
+    """
+    n = len(df)
+    y = df[target_col]
+    rows = []
+    for path_idx, (train_idx, test_idx) in enumerate(
+        cpcv_splits(n, N=N, k=k, embargo_frac=embargo_frac, horizon=horizon)
+    ):
+        df_train = df.iloc[train_idx]
+        df_test = df.iloc[test_idx]
+        selected = select_top_k_features(df_train[all_feature_cols], df_train[target_col], k=top_k)
+
+        model = gb_model_factory()
+        model.fit(df_train[selected], df_train[target_col])
+        pred = np.asarray(model.predict(df_test[selected]), dtype=float)
+        y_true = df_test[target_col].to_numpy(dtype=float)
+
+        rows.append({
+            'path': path_idx,
+            'rank_ic': rank_ic(y_true, pred),
+            'net_cost_sharpe': net_cost_sharpe(np.sign(pred), y_true, fee=fee),
+            'da': float(np.mean((y_true > 0) == (pred > 0))),
+            'n_train': len(train_idx),
+            'n_test': len(test_idx),
+        })
+    return pd.DataFrame(rows)
