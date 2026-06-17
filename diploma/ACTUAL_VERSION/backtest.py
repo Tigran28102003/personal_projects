@@ -33,6 +33,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from metrics import psr
+
 
 # ---------------------------------------------------------------------------
 # Core simulation
@@ -45,6 +47,25 @@ def round_trip_cost(fee_rate: float = 0.0005, slippage_bps: float = 2.0) -> floa
     return 2 * fee_rate + 2 * (slippage_bps / 10_000)
 
 
+def position_size(
+    p_up: float,
+    r_hat: float,
+    sigma: float,
+    kappa: float = 1.0,
+    cap: float = 1.0,
+):
+    """Непрерывный размер позиции по уверенности и обратно — волатильности (T5.1).
+
+    ``conf = 2·p_up − 1 ∈ [−1, 1]`` (уверенность классификатора); сырой размер
+    ``kappa · conf · r̂ / (σ + eps)`` масштабирует ставку по сигналу и риску
+    (vol-targeting), затем клипуется в ``[−cap, cap]`` (допускается short). Работает
+    поэлементно для массивов и для скаляров.
+    """
+    conf = 2.0 * np.asarray(p_up, dtype=float) - 1.0
+    raw = kappa * conf * (np.asarray(r_hat, dtype=float) / (np.asarray(sigma, dtype=float) + 1e-9))
+    return np.clip(raw, -cap, cap)
+
+
 def simulate_strategy(
     oof_df: pd.DataFrame,
     fee_rate: float = 0.0005,
@@ -52,25 +73,35 @@ def simulate_strategy(
     enter_threshold: float = 0.0,
     exit_threshold: Optional[float] = None,
     min_hold: int = 1,
+    size_col: Optional[str] = None,
+    cap: float = 1.0,
+    allow_short: bool = True,
 ) -> pd.DataFrame:
     """
-    Simulate a long/flat strategy on out-of-fold predictions, with cost-aware
-    threshold, hysteresis and minimum holding period to control over-trading.
+    Simulate a trading strategy on out-of-fold predictions.
+
+    Два режима:
+      * **binary long/flat** (по умолчанию, `size_col=None`) — прежний stateful
+        сигнал с cost-aware порогом, гистерезисом и min-hold. Экономика НЕ изменена.
+      * **continuous sizing** (`size_col` задан, T5.1) — целевая позиция берётся из
+        колонки `size_col` (например, `meta_size` из мета-лейблинга): `position_t =
+        clip(size, -cap|0, cap)`, издержки начисляются на изменение нотинала
+        `|Δposition|` (одна сторона за сделку), допускается short (`allow_short`).
 
     Parameters
     ----------
     oof_df          : DataFrame ['timestamp','actual','predicted','fold','model'].
+                      В continuous-режиме должна содержать колонку `size_col`.
     fee_rate        : fee per side as fraction of notional (0.05% Binance maker).
     slippage_bps    : one-way slippage in bps (default 2 bps).
-    enter_threshold : войти в лонг, только если прогнозируемая доходность
-                      `r̂ = predicted/prev_price - 1 > enter_threshold`. Задавайте
-                      `>= round_trip_cost(...)` (cost-aware), чтобы не торговать ради
-                      движений, которые не окупают комиссию.
-    exit_threshold  : выйти, когда `r̂ < exit_threshold`. Если None -> = enter_threshold
-                      (без гистерезиса). При `exit_threshold < enter_threshold` между
-                      порогами образуется «зона удержания» (гистерезис) -> меньше
-                      перекладок на шуме.
-    min_hold        : минимальное число баров удержания после входа (cooldown).
+    enter_threshold : (binary) войти в лонг, только если `r̂ = predicted/prev_price - 1
+                      > enter_threshold`. Задавайте `>= round_trip_cost(...)`.
+    exit_threshold  : (binary) выйти, когда `r̂ < exit_threshold`. None -> = enter.
+    min_hold        : (binary) минимальное число баров удержания после входа.
+    size_col        : имя колонки с непрерывным целевым размером позиции; None ->
+                      бинарный режим.
+    cap             : максимум |position| в continuous-режиме.
+    allow_short     : разрешить отрицательную позицию (short) в continuous-режиме.
 
     Returns
     -------
@@ -88,39 +119,55 @@ def simulate_strategy(
         preds = grp['predicted'].values
         n = len(grp)
 
-        # Stateful long/flat сигнал с порогом, гистерезисом и min-hold.
-        # r̂_t = прогнозируемая доходность относительно прошлой фактической цены.
-        signal = np.zeros(n, dtype=int)
-        state, bars_held = 0, 0
-        for t in range(1, n):
-            prev = prices[t - 1]
-            pr = (preds[t] / prev - 1.0) if prev != 0 else 0.0
-            if state == 1:
-                bars_held += 1
-                if bars_held >= min_hold and pr < exit_threshold:
-                    state, bars_held = 0, 0
-            else:
-                if pr > enter_threshold:
-                    state, bars_held = 1, 1
-            signal[t] = state
-
-        # Detect position changes to apply costs
-        position = signal.copy()
-        trade = np.diff(position, prepend=0)  # +1 = enter, -1 = exit, 0 = hold
-
         fee_usd = np.zeros(n)
         slippage_usd = np.zeros(n)
         pnl_usd = np.zeros(n)
 
-        for t in range(n):
-            entry_price = prices[t - 1] if t > 0 else prices[t]
-            if trade[t] != 0:
-                notional = entry_price
-                fee_usd[t] = notional * fee_rate * 2  # entry + exit both charged at trade
-                slippage_usd[t] = notional * slippage_rate * 2
-            if position[t] == 1 and t > 0:
-                # PnL from holding one unit: price change
-                pnl_usd[t] = prices[t] - prices[t - 1]
+        if size_col is not None and size_col in grp.columns:
+            # ---- continuous sizing: цель = size_col, издержки на |Δposition| ----
+            lo = -cap if allow_short else 0.0
+            position = np.clip(np.nan_to_num(grp[size_col].to_numpy(dtype=float), nan=0.0), lo, cap)
+            signal = position.copy()
+            trade = np.diff(position, prepend=0.0)  # изменение целевой позиции
+            for t in range(n):
+                entry_price = prices[t - 1] if t > 0 else prices[t]
+                if trade[t] != 0:
+                    notional = entry_price * abs(trade[t])     # изменённый нотинал
+                    fee_usd[t] = notional * fee_rate           # одна сторона за сделку
+                    slippage_usd[t] = notional * slippage_rate
+                if t > 0:
+                    pnl_usd[t] = position[t] * (prices[t] - prices[t - 1])
+        else:
+            # ---- binary long/flat (без изменений в экономике) ----
+            # Stateful long/flat сигнал с порогом, гистерезисом и min-hold.
+            # r̂_t = прогнозируемая доходность относительно прошлой фактической цены.
+            signal = np.zeros(n, dtype=int)
+            state, bars_held = 0, 0
+            for t in range(1, n):
+                prev = prices[t - 1]
+                pr = (preds[t] / prev - 1.0) if prev != 0 else 0.0
+                if state == 1:
+                    bars_held += 1
+                    if bars_held >= min_hold and pr < exit_threshold:
+                        state, bars_held = 0, 0
+                else:
+                    if pr > enter_threshold:
+                        state, bars_held = 1, 1
+                signal[t] = state
+
+            # Detect position changes to apply costs
+            position = signal.copy()
+            trade = np.diff(position, prepend=0)  # +1 = enter, -1 = exit, 0 = hold
+
+            for t in range(n):
+                entry_price = prices[t - 1] if t > 0 else prices[t]
+                if trade[t] != 0:
+                    notional = entry_price
+                    fee_usd[t] = notional * fee_rate * 2  # entry + exit both charged at trade
+                    slippage_usd[t] = notional * slippage_rate * 2
+                if position[t] == 1 and t > 0:
+                    # PnL from holding one unit: price change
+                    pnl_usd[t] = prices[t] - prices[t - 1]
 
         net_pnl = pnl_usd - fee_usd - slippage_usd
         equity = np.cumsum(net_pnl)
@@ -176,11 +223,42 @@ def buy_and_hold(oof_df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _sharpe(returns: np.ndarray, periods_per_year: int) -> float:
-    """Annualised Sharpe ratio (Rf = 0) on per-period percentage returns."""
+    """Annualised Sharpe ratio (Rf = 0) on per-period percentage returns.
+
+    Внимание (M4): аннуализация через √periods_per_year предполагает IID-доходности.
+    На 5-мин/часовых данных с автокорреляцией и тяжёлыми хвостами это завышает
+    Sharpe — для статвывода ориентируйтесь на PSR/DSR, а не на голый Sharpe.
+    """
     returns = np.asarray(returns, dtype=float)
     if returns.size == 0 or np.std(returns) == 0:
         return float('nan')
     return float(np.mean(returns) / np.std(returns) * np.sqrt(periods_per_year))
+
+
+def _sortino(returns: np.ndarray, periods_per_year: int) -> float:
+    """Annualised Sortino ratio — штрафует только downside-волатильность."""
+    r = np.asarray(returns, dtype=float)
+    if r.size == 0:
+        return float('nan')
+    downside = r[r < 0]
+    dd = np.std(downside) if downside.size else 0.0
+    if dd <= 0:
+        return float('nan')
+    return float(np.mean(r) / dd * np.sqrt(periods_per_year))
+
+
+def _calmar(returns: np.ndarray, periods_per_year: int) -> float:
+    """Calmar = annualised return / |max drawdown| на % equity-кривой cumprod(1+R)."""
+    r = np.asarray(returns, dtype=float)
+    if r.size == 0:
+        return float('nan')
+    eq = np.cumprod(1.0 + r)
+    peak = np.maximum.accumulate(eq)
+    dd = np.divide(peak - eq, peak, out=np.zeros_like(eq), where=peak != 0)
+    max_dd = float(dd.max())
+    if max_dd <= 0:
+        return float('nan')
+    return float(np.mean(r) * periods_per_year / max_dd)
 
 
 def _max_drawdown(equity: np.ndarray) -> float:
@@ -207,32 +285,41 @@ def backtest_summary(
     Returns
     -------
     DataFrame with one row per (model, 'Strategy'/'Buy&Hold') and columns
-    [model, type, total_return_usd, sharpe, max_drawdown_usd, turnover, pnl_usd]
+    [model, type, total_return_usd, pnl_usd, total_fees_usd, sharpe, sortino,
+    calmar, psr, max_drawdown_usd, turnover]
     """
     rows = []
     for model, sg in strat_df.groupby('model'):
         sg = sg.sort_values('timestamp')
         trades = sg['trade'].abs().sum()
 
+        sg_ret = sg['ret_pct'].values
         rows.append({
             'model': model,
             'type': 'Strategy',
             'total_return_usd': float(sg['equity'].iloc[-1]),
             'pnl_usd': float(sg['pnl_usd'].sum()),
             'total_fees_usd': float(sg['fee_usd'].sum() + sg['slippage_usd'].sum()),
-            'sharpe': _sharpe(sg['ret_pct'].values, periods_per_year),
+            'sharpe': _sharpe(sg_ret, periods_per_year),
+            'sortino': _sortino(sg_ret, periods_per_year),
+            'calmar': _calmar(sg_ret, periods_per_year),
+            'psr': psr(sg_ret),
             'max_drawdown_usd': _max_drawdown(sg['equity'].values),
             'turnover': int(trades),
         })
 
         bh = bh_df[bh_df['model'] == model].sort_values('timestamp')
+        bh_ret = bh['bh_ret_pct'].values
         rows.append({
             'model': model,
             'type': 'Buy&Hold',
             'total_return_usd': float(bh['bh_equity'].iloc[-1]),
             'pnl_usd': float(bh['bh_pnl'].sum()),
             'total_fees_usd': 0.0,
-            'sharpe': _sharpe(bh['bh_ret_pct'].values, periods_per_year),
+            'sharpe': _sharpe(bh_ret, periods_per_year),
+            'sortino': _sortino(bh_ret, periods_per_year),
+            'calmar': _calmar(bh_ret, periods_per_year),
+            'psr': psr(bh_ret),
             'max_drawdown_usd': _max_drawdown(bh['bh_equity'].values),
             'turnover': 0,
         })
