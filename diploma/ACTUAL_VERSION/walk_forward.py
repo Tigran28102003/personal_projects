@@ -211,27 +211,39 @@ def select_top_k_features(
       * 'mda'         — Mean Decrease Accuracy: permutation-важность на OUT-OF-SAMPLE
                         хвосте train-фолда (López de Prado; модель-агностична).
 
-    Колонки, полностью состоящие из NaN, исключаются. (CFI-кластеризация
-    коррелированных фич и SHAP — расширения P2/P3.)
+    Колонки, полностью состоящие из NaN, исключаются. Для кросс-фолдового стабильного
+    отбора с CFI см. `select_stable_features`.
+    """
+    score = _feature_importance(X_train, y_train, method=method, random_state=random_state)
+    return list(score.dropna().nlargest(k).index)
+
+
+def _feature_importance(X_train: pd.DataFrame, y_train: pd.Series, method: str = 'pearson',
+                        random_state: int = 0) -> pd.Series:
+    """Важность признаков на train-фолде (Series, индекс = имена фич). Общий движок для
+    `select_top_k_features` и `select_stable_features`. Колонки all-NaN исключаются.
+
+    method: 'pearson' | 'mutual_info' | 'model_gain' (sklearn RandomForest gain) |
+            'mda' (permutation importance на OOS-хвосте). 'model_gain' намеренно на
+            sklearn, не LightGBM — иначе macOS torch+LightGBM libomp segfault.
     """
     cols = [c for c in X_train.columns if X_train[c].notna().any()]
     X = X_train[cols]
 
     if method == 'pearson':
-        score = X.corrwith(y_train).abs()
-    elif method == 'mutual_info':
+        return X.corrwith(y_train).abs()
+    if method == 'mutual_info':
         from sklearn.feature_selection import mutual_info_regression
         Xi = X.fillna(X.median())
         mi = mutual_info_regression(Xi.to_numpy(), y_train.to_numpy(dtype=float),
                                     random_state=random_state)
-        score = pd.Series(mi, index=cols)
-    elif method == 'model_gain':
+        return pd.Series(mi, index=cols)
+    if method == 'model_gain':
         from sklearn.ensemble import RandomForestRegressor
         Xi = X.fillna(X.median())
-        m = RandomForestRegressor(n_estimators=200, random_state=random_state,
-                                  n_jobs=-1).fit(Xi, y_train)
-        score = pd.Series(m.feature_importances_, index=cols)
-    elif method == 'mda':
+        m = RandomForestRegressor(n_estimators=200, random_state=random_state, n_jobs=-1).fit(Xi, y_train)
+        return pd.Series(m.feature_importances_, index=cols)
+    if method == 'mda':
         from sklearn.ensemble import HistGradientBoostingRegressor
         from sklearn.inspection import permutation_importance
         Xi = X.fillna(X.median())
@@ -240,11 +252,99 @@ def select_top_k_features(
         m.fit(Xi.iloc[:cut], y_train.iloc[:cut])
         r = permutation_importance(m, Xi.iloc[cut:], y_train.iloc[cut:],
                                    n_repeats=5, random_state=random_state)
-        score = pd.Series(r.importances_mean, index=cols)
-    else:
-        raise ValueError(f"unknown selection method: {method!r}")
+        return pd.Series(r.importances_mean, index=cols)
+    raise ValueError(f"unknown selection method: {method!r}")
 
-    return list(score.dropna().nlargest(k).index)
+
+def cluster_collinear(corr_abs: pd.DataFrame, threshold: float = 0.9) -> list[list[str]]:
+    """Кластеры коллинеарных фич (CFI): объединяет признаки с попарным |corr| > threshold
+    (union-find). Возвращает список кластеров (каждый — список имён); некоррелированная
+    фича образует одиночный кластер."""
+    cols = list(corr_abs.columns)
+    parent = {c: c for c in cols}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            v = corr_abs.loc[a, b]
+            if pd.notna(v) and float(v) > threshold:
+                union(a, b)
+
+    clusters: dict[str, list[str]] = {}
+    for c in cols:
+        clusters.setdefault(find(c), []).append(c)
+    return list(clusters.values())
+
+
+def select_stable_features(
+    frame: pd.DataFrame,
+    feature_cols,
+    target_col: str,
+    splits: list[tuple[np.ndarray, np.ndarray]],
+    k: int,
+    method: str = 'mda',
+    corr_threshold: float = 0.9,
+    dev_frac: float = 0.6,
+    max_folds: int = 20,
+    random_state: int = 0,
+) -> list[str]:
+    """Стабильный отбор фич: МЕДИАНА важности по фолдам **dev-префикса** + CFI (T7.5).
+
+    Отличие от per-fold `select_top_k_features`: важность усредняется по многим фолдам
+    (медиана) -> устойчивость к шуму одного среза, а CFI схлопывает коллинеарные группы
+    (substitution effect). **Leakage-safe**: важность считается ТОЛЬКО на первых
+    `dev_frac` фолдах (development period), набор фич фиксируется и применяется на всём
+    walk-forward — как при деплое (фичи выбираются на истории, дальше используются
+    вперёд), без подглядывания в поздние тест-фолды.
+
+    Параметры: `method` — движок важности (по умолчанию 'mda'); `corr_threshold` — порог
+    CFI; `max_folds` — равномерная подвыборка dev-фолдов (ограничение compute).
+    Возвращает до `k` имён фич. На вырожденных данных откатывается к pearson top-k.
+    """
+    cols = [c for c in feature_cols if c in frame.columns and frame[c].notna().any()]
+    if len(cols) <= k:
+        return cols
+
+    n_dev = max(1, int(len(splits) * dev_frac))
+    dev = splits[:n_dev]
+    fold_ids = np.unique(np.linspace(0, len(dev) - 1, min(max_folds, len(dev))).astype(int))
+
+    imps = []
+    for j in fold_ids:
+        tr = dev[int(j)][0]
+        Xt, yt = frame.iloc[tr][cols], frame.iloc[tr][target_col]
+        if len(Xt) < 10 or yt.notna().sum() < 10:
+            continue
+        imps.append(_feature_importance(Xt, yt, method=method, random_state=random_state))
+    if not imps:
+        tr0 = splits[0][0]
+        return select_top_k_features(frame.iloc[tr0][cols], frame.iloc[tr0][target_col], k, method='pearson')
+
+    med = pd.concat(imps, axis=1).median(axis=1).dropna()
+    if med.empty:
+        return cols[:k]
+
+    # CFI: на dev-данных кластеризуем коллинеарные фичи, в каждом кластере оставляем фичу
+    # с наибольшей МЕДИАННОЙ важностью.
+    dev_X = frame.iloc[dev[-1][0]][list(med.index)]
+    corr_abs = dev_X.corr().abs().fillna(0.0)
+    kept = []
+    for cluster in cluster_collinear(corr_abs, corr_threshold):
+        cl = [c for c in cluster if c in med.index]
+        if cl:
+            kept.append(med.loc[cl].idxmax())
+    ranked = med.loc[kept].sort_values(ascending=False)
+    return list(ranked.head(k).index)
 
 
 def select_best_by_composite(
@@ -316,30 +416,49 @@ def preprocess_fold(
 # 5 эпохам обрывал обучение в шумовом минимуме.
 NN_PATIENCE = 8
 
-# Псевдонимы имён Optuna-параметров -> атрибутов эстиматора. Структурные параметры
-# совпадают по имени между Optuna и бустингом; только learning_rate сокращён до 'lr',
-# а 'n_est' распределяется на первый из n_estimators/iterations/max_iter.
+# Псевдонимы имён Optuna-параметров -> имён гиперпараметров эстиматора. Структурные
+# параметры совпадают по имени; только learning_rate сокращён до 'lr', а 'n_est'
+# распределяется на первый из n_estimators/iterations/max_iter.
 _GB_PARAM_ALIAS = {'lr': 'learning_rate'}
 _GB_N_EST_ATTRS = ('n_estimators', 'iterations', 'max_iter')
+
+
+def _gb_param_names(step) -> set:
+    """Имена гиперпараметров, которые РЕАЛЬНО принимает эстиматор.
+
+    Через `get_params()`, а НЕ `hasattr`: CatBoost не выставляет свои параметры как
+    атрибуты инстанса, из-за чего прежний `hasattr`-гейт вообще не тюнил CatBoost
+    (он молча работал на фикс-дефолтах -> нечестное сравнение бустингов). `get_params`
+    одинаково корректен для sklearn-обёрток (HistGB/LightGBM/XGBoost) и CatBoost.
+
+    Нюанс: у sklearn-обёрток `get_params()` возвращает ВСЕ параметры (с дефолтами), а
+    у CatBoost — только ЯВНО заданные. Поэтому CatBoost тюнится ровно по тем ключам,
+    что заданы в `GB_HYPERPARAMS` (lr/iterations/depth/l2_leaf_reg) — этого достаточно.
+    """
+    try:
+        return set(step.get_params().keys())
+    except Exception:
+        return set()
 
 
 def _apply_gb_params(model, params: dict) -> None:
     """Применить подобранные Optuna-параметры к свежему GB-Pipeline (refit).
 
-    Пропускает параметры, которых нет у конкретного бустинга (`hasattr` по
-    `named_steps['model']`), и распределяет 'n_est' на доступный счётчик деревьев.
-    Единый источник правды о маппинге для objective и refit (T3.2).
+    Пропускает параметры, которых нет у конкретного бустинга (членство в
+    `get_params()`), и распределяет 'n_est' на доступный счётчик деревьев. Единый
+    источник правды о маппинге для objective и refit (T3.2).
     """
     step = model.named_steps['model']
+    have = _gb_param_names(step)
     for name, value in params.items():
         if name == 'n_est':
             for attr in _GB_N_EST_ATTRS:
-                if hasattr(step, attr):
+                if attr in have:
                     model.set_params(**{f'model__{attr}': value})
                     break
             continue
         attr = _GB_PARAM_ALIAS.get(name, name)
-        if hasattr(step, attr):
+        if attr in have:
             model.set_params(**{f'model__{attr}': value})
 
 
@@ -361,10 +480,13 @@ def _gb_objective(
     Цена не нужна — всё в return-space.
 
     Тюнится не только `lr` + счётчик деревьев, но и полный набор структурных
-    гиперпараметров там, где бустинг их экспонирует (`hasattr`): max_depth / depth /
-    num_leaves / min_child_samples / subsample / colsample_bytree / reg_lambda /
-    l2_regularization / l2_leaf_reg. `GB_HYPERPARAMS` остаются лишь стартовыми
-    дефолтами.
+    гиперпараметров там, где бустинг их поддерживает (членство в `get_params()`, НЕ
+    `hasattr` — иначе CatBoost молча не тюнился): max_depth / depth / num_leaves /
+    min_child_samples / subsample / colsample_bytree / reg_lambda / l2_regularization /
+    l2_leaf_reg. Для HistGB, у которого НЕТ стохастического subsample/colsample,
+    добавлены свои регуляризаторы (max_leaf_nodes / min_samples_leaf / max_features —
+    сэмплинг фич), чтобы сравнение бустингов было честным. `GB_HYPERPARAMS` остаются
+    лишь стартовыми дефолтами.
 
     CV uses `PurgedKFold` (purge перекрывающихся меток + embargo) на train-фолде
     вместо `TimeSeriesSplit` (T2.2). Embargo = max(horizon, 1% длины train-фолда).
@@ -377,38 +499,47 @@ def _gb_objective(
     def objective(trial):
         model = model_factory()
         step = model.named_steps['model']
+        have = _gb_param_names(step)   # имена реально поддерживаемых гиперпараметров
 
-        if hasattr(step, 'learning_rate'):
+        if 'learning_rate' in have:
             model.set_params(
                 model__learning_rate=trial.suggest_float('lr', 1e-3, 0.3, log=True)
             )
         for attr in _GB_N_EST_ATTRS:
-            if hasattr(step, attr):
+            if attr in have:
                 model.set_params(**{
                     f'model__{attr}': trial.suggest_int('n_est', 100, 800, step=100)
                 })
                 break
 
-        # Структурные HP — подбираются только если эстиматор их поддерживает, чтобы
+        # Структурные HP — подбираются только если бустинг их поддерживает, чтобы
         # study.best_params содержал ровно применимые ключи (и refit их применил).
-        if hasattr(step, 'max_depth'):
+        if 'max_depth' in have:
             model.set_params(model__max_depth=trial.suggest_int('max_depth', 2, 8))
-        if hasattr(step, 'depth'):           # CatBoost
+        if 'depth' in have:              # CatBoost
             model.set_params(model__depth=trial.suggest_int('depth', 2, 8))
-        if hasattr(step, 'num_leaves'):      # LightGBM
+        if 'num_leaves' in have:         # LightGBM
             model.set_params(model__num_leaves=trial.suggest_int('num_leaves', 15, 255))
-        if hasattr(step, 'min_child_samples'):
+        if 'min_child_samples' in have:  # LightGBM
             model.set_params(model__min_child_samples=trial.suggest_int('min_child_samples', 5, 80))
-        if hasattr(step, 'subsample'):
+        if 'subsample' in have:          # LightGBM / XGBoost (стох. бэггинг строк)
             model.set_params(model__subsample=trial.suggest_float('subsample', 0.6, 1.0))
-        if hasattr(step, 'colsample_bytree'):
+        if 'colsample_bytree' in have:   # LightGBM / XGBoost (сэмплинг фич)
             model.set_params(model__colsample_bytree=trial.suggest_float('colsample_bytree', 0.6, 1.0))
-        if hasattr(step, 'reg_lambda'):      # LightGBM / XGBoost
+        if 'reg_lambda' in have:         # LightGBM / XGBoost
             model.set_params(model__reg_lambda=trial.suggest_float('reg_lambda', 1e-3, 10.0, log=True))
-        if hasattr(step, 'l2_regularization'):   # HistGradientBoosting
+        if 'l2_regularization' in have:  # HistGradientBoosting
             model.set_params(model__l2_regularization=trial.suggest_float('l2_regularization', 1e-3, 10.0, log=True))
-        if hasattr(step, 'l2_leaf_reg'):     # CatBoost
+        if 'l2_leaf_reg' in have:        # CatBoost
             model.set_params(model__l2_leaf_reg=trial.suggest_float('l2_leaf_reg', 1e-1, 10.0, log=True))
+        # HistGB-специфичные регуляризаторы (у него нет subsample/colsample) —
+        # компенсируют отсутствие стохастичности на низкосигнальных данных:
+        if 'max_leaf_nodes' in have:     # HistGB
+            model.set_params(model__max_leaf_nodes=trial.suggest_int('max_leaf_nodes', 15, 63))
+        if 'min_samples_leaf' in have:   # HistGB
+            model.set_params(model__min_samples_leaf=trial.suggest_int('min_samples_leaf', 20, 200))
+        if 'max_features' in have:       # HistGB — сэмплинг фич на сплит (аналог colsample)
+            model.set_params(model__max_features=trial.suggest_float('max_features', 0.5, 1.0))
 
         sharpes = []
         for tr, te in cv.split(X_train):
