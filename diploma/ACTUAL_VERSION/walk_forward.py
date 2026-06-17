@@ -123,6 +123,25 @@ def rolling_window_splits(
     return splits
 
 
+def forward_log_return(price: pd.Series, horizon: int = 1) -> pd.Series:
+    """Forward cumulative log-return target over `horizon` bars (T6.3).
+
+    Метка в строке t — сумма СЛЕДУЮЩИХ `horizon` лог-доходностей
+    ``R_t^{(h)} = log(P_{t+h-1}) − log(P_{t-1}) = r_t + … + r_{t+h-1}``, где
+    ``r_s = log(P_s) − log(P_{s-1})``. Это будущая (forward) кумулятивная
+    доходность, поэтому она НЕ пересекается с лагированными признаками (≤ r_{t-1})
+    — leakage-safe. При ``horizon == 1`` тождественно равно ``log(P).diff()`` (как в
+    исходном одношаговом таргете — байт-в-байт). Последние ``horizon-1`` строк -> NaN
+    (нет будущего) и отбрасываются вызывающим кодом.
+    """
+    if horizon < 1:
+        raise ValueError(f'horizon must be >= 1, got {horizon}')
+    r = np.log(price.astype(float)).replace([np.inf, -np.inf], np.nan).diff()
+    if horizon == 1:
+        return r
+    return r.rolling(horizon).sum().shift(-(horizon - 1))
+
+
 # ---------------------------------------------------------------------------
 # Leakage-safe feature selection and preprocessing utilities
 # ---------------------------------------------------------------------------
@@ -421,6 +440,7 @@ def run_walk_forward(
     gb_model_factory: Optional[Callable] = None,
     seed: int = 42,
     retune_every: int = 1,
+    horizon: int = 1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Walk-forward loop for one model (GB or NN).
@@ -442,6 +462,10 @@ def run_walk_forward(
                        tuned hyperparameters in between (1 = tune every fold, as before).
                        For the short-window / many-fold scheme set e.g. 20 so per-fold
                        tuning stays tractable — refit is cheap, re-tuning is not.
+    horizon          : forecast horizon h (число баров кумулятивной forward-метки, T6.3).
+                       При h>1 из каждого train-фолда отбрасываются последние (h−1) строк
+                       (embargo/purge: их forward-метки перекрывают test-блок). h=1 — без
+                       изменений. Также прокидывается в PurgedKFold Optuna-objective.
 
     Returns
     -------
@@ -458,6 +482,11 @@ def run_walk_forward(
 
     for fold_idx, (train_idx, test_idx) in enumerate(splits):
         fold_seed = seed + fold_idx
+
+        # Embargo/purge для forward-метки горизонта h: последние (h−1) строк train
+        # перекрываются по времени с метками test -> отбрасываем их (h=1 -> без эффекта).
+        if horizon > 1 and len(train_idx) > horizon - 1:
+            train_idx = train_idx[:-(horizon - 1)]
 
         df_train = df.iloc[train_idx]
         df_test = df.iloc[test_idx]
@@ -477,7 +506,7 @@ def run_walk_forward(
             # Runs only on retune folds; else reuse cached params.
             if cached_params is None or fold_idx % retune_every == 0:
                 study = run_optuna_study(
-                    _gb_objective(gb_model_factory, X_train, y_train),
+                    _gb_objective(gb_model_factory, X_train, y_train, horizon=horizon),
                     direction='minimize',   # objective returns -Sharpe
                     n_trials=optuna_n_trials,
                     seed=fold_seed,
