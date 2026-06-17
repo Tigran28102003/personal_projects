@@ -142,6 +142,35 @@ def forward_log_return(price: pd.Series, horizon: int = 1) -> pd.Series:
     return r.rolling(horizon).sum().shift(-(horizon - 1))
 
 
+def add_cyclical_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add deterministic time-of-day / calendar cyclical features (EPIC 7, T7.1).
+
+    Кодирует время прогнозируемого бара через sin/cos: minute-of-day (период 1440),
+    hour (24), day-of-week (7), month (12). Признаки ДЕТЕРМИНИРОВАНЫ по timestamp
+    прогноза -> известны заранее, поэтому НЕ лагируются (утечки нет); подаются в
+    exog-ветку. Требует DatetimeIndex. Возвращает копию с колонками
+    tod_sin/tod_cos, hour_sin/hour_cos, dow_sin/dow_cos, month_sin/month_cos.
+    """
+    idx = pd.DatetimeIndex(df.index)
+    out = df.copy()
+    two_pi = 2.0 * np.pi
+    mod = idx.hour * 60 + idx.minute
+    out['tod_sin'] = np.sin(two_pi * mod / 1440.0)
+    out['tod_cos'] = np.cos(two_pi * mod / 1440.0)
+    out['hour_sin'] = np.sin(two_pi * idx.hour / 24.0)
+    out['hour_cos'] = np.cos(two_pi * idx.hour / 24.0)
+    dow = idx.dayofweek
+    out['dow_sin'] = np.sin(two_pi * dow / 7.0)
+    out['dow_cos'] = np.cos(two_pi * dow / 7.0)
+    out['month_sin'] = np.sin(two_pi * idx.month / 12.0)
+    out['month_cos'] = np.cos(two_pi * idx.month / 12.0)
+    return out
+
+
+CYCLICAL_FEATURES = ('tod_sin', 'tod_cos', 'hour_sin', 'hour_cos',
+                     'dow_sin', 'dow_cos', 'month_sin', 'month_cos')
+
+
 # ---------------------------------------------------------------------------
 # Leakage-safe feature selection and preprocessing utilities
 # ---------------------------------------------------------------------------
@@ -166,13 +195,56 @@ def select_top_k_features(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     k: int,
+    method: str = 'pearson',
+    random_state: int = 0,
 ) -> list[str]:
     """
-    Top-k features by |Pearson correlation| with the target, computed on the
-    training fold only. Columns with all-NaN are excluded before ranking.
+    Top-k feature selection on the TRAIN fold only (leakage-free, T7.2).
+
+    `method`:
+      * 'pearson'     — |Pearson corr| с таргетом (по умолчанию; линейная связь).
+      * 'mutual_info' — `sklearn.mutual_info_regression` (ловит нелинейные связи).
+      * 'model_gain'  — impurity/gain-важность tree-ансамбля (sklearn RandomForest,
+                        модельная, in-sample). Намеренно sklearn, а не LightGBM: на
+                        macOS LightGBM-libomp конфликтует с torch-libomp в одном
+                        процессе (сегфолт); отбор признаков от этого свободен.
+      * 'mda'         — Mean Decrease Accuracy: permutation-важность на OUT-OF-SAMPLE
+                        хвосте train-фолда (López de Prado; модель-агностична).
+
+    Колонки, полностью состоящие из NaN, исключаются. (CFI-кластеризация
+    коррелированных фич и SHAP — расширения P2/P3.)
     """
-    corrs = X_train.corrwith(y_train).abs().dropna()
-    return list(corrs.nlargest(k).index)
+    cols = [c for c in X_train.columns if X_train[c].notna().any()]
+    X = X_train[cols]
+
+    if method == 'pearson':
+        score = X.corrwith(y_train).abs()
+    elif method == 'mutual_info':
+        from sklearn.feature_selection import mutual_info_regression
+        Xi = X.fillna(X.median())
+        mi = mutual_info_regression(Xi.to_numpy(), y_train.to_numpy(dtype=float),
+                                    random_state=random_state)
+        score = pd.Series(mi, index=cols)
+    elif method == 'model_gain':
+        from sklearn.ensemble import RandomForestRegressor
+        Xi = X.fillna(X.median())
+        m = RandomForestRegressor(n_estimators=200, random_state=random_state,
+                                  n_jobs=-1).fit(Xi, y_train)
+        score = pd.Series(m.feature_importances_, index=cols)
+    elif method == 'mda':
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        from sklearn.inspection import permutation_importance
+        Xi = X.fillna(X.median())
+        cut = max(1, int(len(Xi) * 0.7))
+        m = HistGradientBoostingRegressor(max_iter=120, random_state=random_state)
+        m.fit(Xi.iloc[:cut], y_train.iloc[:cut])
+        r = permutation_importance(m, Xi.iloc[cut:], y_train.iloc[cut:],
+                                   n_repeats=5, random_state=random_state)
+        score = pd.Series(r.importances_mean, index=cols)
+    else:
+        raise ValueError(f"unknown selection method: {method!r}")
+
+    return list(score.dropna().nlargest(k).index)
 
 
 def select_best_by_composite(
