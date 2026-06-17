@@ -211,27 +211,39 @@ def select_top_k_features(
       * 'mda'         — Mean Decrease Accuracy: permutation-важность на OUT-OF-SAMPLE
                         хвосте train-фолда (López de Prado; модель-агностична).
 
-    Колонки, полностью состоящие из NaN, исключаются. (CFI-кластеризация
-    коррелированных фич и SHAP — расширения P2/P3.)
+    Колонки, полностью состоящие из NaN, исключаются. Для кросс-фолдового стабильного
+    отбора с CFI см. `select_stable_features`.
+    """
+    score = _feature_importance(X_train, y_train, method=method, random_state=random_state)
+    return list(score.dropna().nlargest(k).index)
+
+
+def _feature_importance(X_train: pd.DataFrame, y_train: pd.Series, method: str = 'pearson',
+                        random_state: int = 0) -> pd.Series:
+    """Важность признаков на train-фолде (Series, индекс = имена фич). Общий движок для
+    `select_top_k_features` и `select_stable_features`. Колонки all-NaN исключаются.
+
+    method: 'pearson' | 'mutual_info' | 'model_gain' (sklearn RandomForest gain) |
+            'mda' (permutation importance на OOS-хвосте). 'model_gain' намеренно на
+            sklearn, не LightGBM — иначе macOS torch+LightGBM libomp segfault.
     """
     cols = [c for c in X_train.columns if X_train[c].notna().any()]
     X = X_train[cols]
 
     if method == 'pearson':
-        score = X.corrwith(y_train).abs()
-    elif method == 'mutual_info':
+        return X.corrwith(y_train).abs()
+    if method == 'mutual_info':
         from sklearn.feature_selection import mutual_info_regression
         Xi = X.fillna(X.median())
         mi = mutual_info_regression(Xi.to_numpy(), y_train.to_numpy(dtype=float),
                                     random_state=random_state)
-        score = pd.Series(mi, index=cols)
-    elif method == 'model_gain':
+        return pd.Series(mi, index=cols)
+    if method == 'model_gain':
         from sklearn.ensemble import RandomForestRegressor
         Xi = X.fillna(X.median())
-        m = RandomForestRegressor(n_estimators=200, random_state=random_state,
-                                  n_jobs=-1).fit(Xi, y_train)
-        score = pd.Series(m.feature_importances_, index=cols)
-    elif method == 'mda':
+        m = RandomForestRegressor(n_estimators=200, random_state=random_state, n_jobs=-1).fit(Xi, y_train)
+        return pd.Series(m.feature_importances_, index=cols)
+    if method == 'mda':
         from sklearn.ensemble import HistGradientBoostingRegressor
         from sklearn.inspection import permutation_importance
         Xi = X.fillna(X.median())
@@ -240,11 +252,99 @@ def select_top_k_features(
         m.fit(Xi.iloc[:cut], y_train.iloc[:cut])
         r = permutation_importance(m, Xi.iloc[cut:], y_train.iloc[cut:],
                                    n_repeats=5, random_state=random_state)
-        score = pd.Series(r.importances_mean, index=cols)
-    else:
-        raise ValueError(f"unknown selection method: {method!r}")
+        return pd.Series(r.importances_mean, index=cols)
+    raise ValueError(f"unknown selection method: {method!r}")
 
-    return list(score.dropna().nlargest(k).index)
+
+def cluster_collinear(corr_abs: pd.DataFrame, threshold: float = 0.9) -> list[list[str]]:
+    """Кластеры коллинеарных фич (CFI): объединяет признаки с попарным |corr| > threshold
+    (union-find). Возвращает список кластеров (каждый — список имён); некоррелированная
+    фича образует одиночный кластер."""
+    cols = list(corr_abs.columns)
+    parent = {c: c for c in cols}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            v = corr_abs.loc[a, b]
+            if pd.notna(v) and float(v) > threshold:
+                union(a, b)
+
+    clusters: dict[str, list[str]] = {}
+    for c in cols:
+        clusters.setdefault(find(c), []).append(c)
+    return list(clusters.values())
+
+
+def select_stable_features(
+    frame: pd.DataFrame,
+    feature_cols,
+    target_col: str,
+    splits: list[tuple[np.ndarray, np.ndarray]],
+    k: int,
+    method: str = 'mda',
+    corr_threshold: float = 0.9,
+    dev_frac: float = 0.6,
+    max_folds: int = 20,
+    random_state: int = 0,
+) -> list[str]:
+    """Стабильный отбор фич: МЕДИАНА важности по фолдам **dev-префикса** + CFI (T7.5).
+
+    Отличие от per-fold `select_top_k_features`: важность усредняется по многим фолдам
+    (медиана) -> устойчивость к шуму одного среза, а CFI схлопывает коллинеарные группы
+    (substitution effect). **Leakage-safe**: важность считается ТОЛЬКО на первых
+    `dev_frac` фолдах (development period), набор фич фиксируется и применяется на всём
+    walk-forward — как при деплое (фичи выбираются на истории, дальше используются
+    вперёд), без подглядывания в поздние тест-фолды.
+
+    Параметры: `method` — движок важности (по умолчанию 'mda'); `corr_threshold` — порог
+    CFI; `max_folds` — равномерная подвыборка dev-фолдов (ограничение compute).
+    Возвращает до `k` имён фич. На вырожденных данных откатывается к pearson top-k.
+    """
+    cols = [c for c in feature_cols if c in frame.columns and frame[c].notna().any()]
+    if len(cols) <= k:
+        return cols
+
+    n_dev = max(1, int(len(splits) * dev_frac))
+    dev = splits[:n_dev]
+    fold_ids = np.unique(np.linspace(0, len(dev) - 1, min(max_folds, len(dev))).astype(int))
+
+    imps = []
+    for j in fold_ids:
+        tr = dev[int(j)][0]
+        Xt, yt = frame.iloc[tr][cols], frame.iloc[tr][target_col]
+        if len(Xt) < 10 or yt.notna().sum() < 10:
+            continue
+        imps.append(_feature_importance(Xt, yt, method=method, random_state=random_state))
+    if not imps:
+        tr0 = splits[0][0]
+        return select_top_k_features(frame.iloc[tr0][cols], frame.iloc[tr0][target_col], k, method='pearson')
+
+    med = pd.concat(imps, axis=1).median(axis=1).dropna()
+    if med.empty:
+        return cols[:k]
+
+    # CFI: на dev-данных кластеризуем коллинеарные фичи, в каждом кластере оставляем фичу
+    # с наибольшей МЕДИАННОЙ важностью.
+    dev_X = frame.iloc[dev[-1][0]][list(med.index)]
+    corr_abs = dev_X.corr().abs().fillna(0.0)
+    kept = []
+    for cluster in cluster_collinear(corr_abs, corr_threshold):
+        cl = [c for c in cluster if c in med.index]
+        if cl:
+            kept.append(med.loc[cl].idxmax())
+    ranked = med.loc[kept].sort_values(ascending=False)
+    return list(ranked.head(k).index)
 
 
 def select_best_by_composite(
