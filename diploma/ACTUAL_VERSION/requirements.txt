@@ -46,3 +46,6 @@ shap>=0.46                     # TreeExplainer for GB models (requires numpy<2.0
 # ── Visualisation ─────────────────────────────────────────────
 matplotlib==3.10.1
 seaborn>=0.13.2
+
+# ── Testing (dev) ─────────────────────────────────────────────
+pytest>=8.0                    # tests/ — metrics/validation/no-lookahead suites

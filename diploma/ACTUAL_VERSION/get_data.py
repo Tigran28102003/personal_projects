@@ -74,14 +74,87 @@ def _obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     return (direction * volume).cumsum()
 
 
+# Publication-lag для FRED-рядов: дополнительный сдвиг (в БАРАХ целевой частоты;
+# на дневной сетке ≈ календарных дней) сверх базового лага-1, т.к. макроданные
+# публикуются ПОЗЖЕ отчётной даты, и «значение на дату t» в момент t ещё не
+# наблюдаемо (CPI/занятость/инфляция ~месяц, недельные ~неделя, дневные ставки ~1).
+# Значения приближённые; параметризуются через DataMaker(fred_pub_lag=...).
+# Дополнять под реальный состав self.fredapi_series.
+DEFAULT_FRED_PUB_LAG = {
+    "Unemployment_Rate": 30,
+    "Non_Farm_Payrolls": 30,
+    "Initial_Jobless_Claims": 7,
+    "CPI": 30,
+    "PCE_Price_Index": 30,
+    "Consumer_Confidence_Index": 30,
+    "Retail_Sales": 30,
+    "Housing_Starts": 30,
+    "Building_Permits": 30,
+    "M2_Money_Supply": 30,
+    "Real_Interest_Rate": 1,
+    "Fed_Funds_Rate": 30,
+    "Reverse_Repo_Volume": 1,
+    "Debt": 90,
+    "Real_GDP": 90,
+}
+
+
+def lag_exogenous(
+    df: pd.DataFrame,
+    exog_cols: list,
+    pub_lag_bars: Optional[dict] = None,
+    base_lag: int = 1,
+) -> pd.DataFrame:
+    """
+    Strict-лагирование экзогенных рядов — единый источник зазора (фикс C4 / T1.1).
+
+    Раньше `shift(1)` применялся только к Yahoo-concat блоку ДО мёрджей с
+    FRED/supply/Fear&Greed, поэтому макроряды и supply попадали в строку t
+    несдвинутыми (look-ahead). Эта функция вызывается ПОСЛЕ всех мёрджей и
+    лагирует каждый столбец из `exog_cols`:
+
+      1. `ffill` на текущей сетке — в строке t оказывается ПОСЛЕДНЕЕ известное к t
+         значение (ffill смотрит только назад, будущее не протаскивается);
+      2. сдвиг на `base_lag` баров (синхронная ненаблюдаемость на закрытии бара t)
+         плюс publication-lag `pub_lag_bars[col]` для макрорядов FRED.
+
+    Столбцы, НЕ входящие в `exog_cols`, не изменяются. Вызывающий код обязан
+    исключить из `exog_cols`: 'BTC' (источник таргета и собственных лагов),
+    BTC-производные индикаторы (RSI/MACD/ATR/OBV/BTC_mean*/BTC_std*) и
+    Feer_Greed_value — их лагирует prep_returns (чтобы не было двойного лага), а
+    также календарные признаки — они детерминированы по timestamp.
+
+    `df`: датафрейм после всех мёрджей
+    `exog_cols`: имена экзогенных столбцов, подлежащих лагированию
+    `pub_lag_bars`: доп. сдвиг (в барах) для отдельных столбцов; по умолчанию 0
+    `base_lag`: базовый лаг в барах (по умолчанию 1)
+    """
+    pub_lag_bars = pub_lag_bars or {}
+    present = [c for c in exog_cols if c in df.columns]
+    out = df.copy()
+    if present:
+        # ffill ДО сдвига: значение в строке t = последнее наблюдаемое к t.
+        out[present] = out[present].ffill()
+        for col in present:
+            shift_n = base_lag + int(pub_lag_bars.get(col, 0))
+            if shift_n:
+                out[col] = out[col].shift(shift_n)
+    return out
+
+
 class DataMaker:
-    def __init__(self, start_date: str = "2018-01-01", end_date: Optional[str] = None, fred_api_key: Optional[str] = None) -> None:
+    def __init__(self, start_date: str = "2018-01-01", end_date: Optional[str] = None, fred_api_key: Optional[str] = None,
+                 fred_pub_lag: Optional[dict] = None) -> None:
         """
         библиотека для сбора данных для предсказания BTC
+
+        `fred_pub_lag`: словарь {имя FRED-ряда: доп. лаг в днях} для учёта
+        задержки публикации макроданных при лагировании (см. DEFAULT_FRED_PUB_LAG).
         """
         self.start_date = start_date
         self.end_date = end_date or datetime.today().strftime("%Y-%m-%d")
         self.fred_api_key = fred_api_key or os.getenv("FRED_API_KEY", "YOUR_API_KEY_HERE")
+        self.fred_pub_lag = dict(DEFAULT_FRED_PUB_LAG) if fred_pub_lag is None else dict(fred_pub_lag)
         self.fred = Fred(api_key=self.fred_api_key)
         self._session = _make_session()
         # curl_cffi-сессия с имитацией TLS-отпечатка Chrome — обязательна для
@@ -472,17 +545,10 @@ class DataMaker:
 
         df = self.get_yahoo_data('1d')
 
-        # Защита от look-ahead bias: все экзогенные ряды (другие активы, индексы,
-        # макро) сдвигаются на 1 бар назад. В момент закрытия бара t их значения за
-        # t ещё не наблюдаемы синхронно (несовпадающие торговые сессии, лаг
-        # публикации макроданных), поэтому в качестве предиктора BTC_t допустимо
-        # только их значение за t-1. OHLCV самого BTC НЕ сдвигаются: это источник
-        # целевой переменной и собственных лагов BTC (формируются ниже явным shift).
-        not_target_cols = df.columns[~df.columns.isin(['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume'])]
-        df = pd.concat([
-            df[['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume']],
-            df[not_target_cols].shift(1)
-        ], axis=1).iloc[1:]
+        # Технические индикаторы и взвешенная цена считаются на НЕсдвинутых BTC
+        # OHLCV (источник таргета). Лагирование ВСЕХ экзогенных рядов — единым
+        # проходом ПОСЛЕ мёрджей (см. lag_exogenous ниже), чтобы FRED/supply/др.
+        # активы не попадали в строку t несдвинутыми (фикс look-ahead C4/T1.1).
         df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         df = self._get_right_price(df)
 
@@ -503,6 +569,18 @@ class DataMaker:
                 left_index=True, right_index=True,
                 how='left')
             )
+
+        # Единый strict-lag экзогенных рядов после мёрджей. НЕ лагируем здесь:
+        #  - 'BTC' (источник таргета и собственных лагов BTC, формируемых ниже);
+        #  - RSI/MACD/ATR/OBV и Feer_Greed_value — их лагирует prep_returns (единый
+        #    источник зазора); повторный сдвиг здесь дал бы двойной лаг;
+        #  - календарные признаки (добавляются ниже) — известны заранее.
+        # FRED-ряды получают дополнительный publication-lag (дни ≈ бары daily).
+        fred_cols = [c for c in self.fredapi_series if c in df.columns]
+        not_exog = {'BTC', 'RSI', 'MACD', 'ATR', 'OBV', 'Feer_Greed_value'}
+        exog_cols = [c for c in df.columns if c not in not_exog]
+        pub_lag_bars = {c: self.fred_pub_lag.get(c, 0) for c in fred_cols}
+        df = lag_exogenous(df, exog_cols, pub_lag_bars=pub_lag_bars, base_lag=1)
 
         df['day'] = df.index.day.astype(int)
         df['month'] = df.index.month.astype(int)
@@ -532,17 +610,8 @@ class DataMaker:
 
         df = self.get_yahoo_data('1wk')
 
-        # Защита от look-ahead bias: все экзогенные ряды (другие активы, индексы,
-        # макро) сдвигаются на 1 бар назад. В момент закрытия бара t их значения за
-        # t ещё не наблюдаемы синхронно (несовпадающие торговые сессии, лаг
-        # публикации макроданных), поэтому в качестве предиктора BTC_t допустимо
-        # только их значение за t-1. OHLCV самого BTC НЕ сдвигаются: это источник
-        # целевой переменной и собственных лагов BTC (формируются ниже явным shift).
-        not_target_cols = df.columns[~df.columns.isin(['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume'])]
-        df = pd.concat([
-            df[['BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume']],
-            df[not_target_cols].shift(1)
-        ], axis=1).iloc[1:]
+        # Индикаторы и взвешенная цена — на НЕсдвинутых BTC OHLCV; лагирование всех
+        # экзогенных рядов выполняется единым проходом после мёрджей (фикс C4/T1.1).
         df = self.add_technical_indicators(df, 'BTC_Close', 'BTC_High', 'BTC_Low', 'BTC_Volume')
         df = self._get_right_price(df)
 
@@ -565,6 +634,18 @@ class DataMaker:
                 left_index=True, right_index=True,
                 how='left')
             )
+
+        # Единый strict-lag экзогенных рядов после мёрджей. В отличие от дневного
+        # билдера, weekly НЕ проходит через prep_returns, поэтому Feer_Greed_value
+        # лагируется ЗДЕСЬ (иначе остался бы синхронным). FRED-publication-lag
+        # переводится из дней в недели. NB: BTC-производные (RSI/MACD/ATR/OBV)
+        # здесь не лагируются — TODO: при прямом использовании weekly без
+        # prep_returns их нужно сдвинуть отдельно (сейчас weekly не в DATA_CONFIG).
+        fred_cols = [c for c in self.fredapi_series if c in df.columns]
+        not_exog = {'BTC', 'RSI', 'MACD', 'ATR', 'OBV'}
+        exog_cols = [c for c in df.columns if c not in not_exog]
+        pub_lag_bars = {c: int(np.ceil(self.fred_pub_lag.get(c, 0) / 7)) for c in fred_cols}
+        df = lag_exogenous(df, exog_cols, pub_lag_bars=pub_lag_bars, base_lag=1)
 
         df['month'] = df.index.month.astype(int)
         df['quarter'] = df.index.quarter.astype(int)
