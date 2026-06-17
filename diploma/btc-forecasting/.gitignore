@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Эксперименты / артефакты обучения
+wandb/
+*.db
+optuna*.log
+catboost_info/
+
+# Бэкапы / временное
+*.bak
+*.tmp
+*~
+
+# ОС
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# ВНИМАНИЕ: CSV-данные НЕ игнорируются (нужны для запуска ноутбука).
+# При желании храните их через Git LFS — см. README.

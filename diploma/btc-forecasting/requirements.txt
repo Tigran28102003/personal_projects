@@ -1,0 +1,48 @@
+# ──────────────────────────────────────────────────────────────
+# BTC Forecasting Pipeline — minimal requirements
+# ──────────────────────────────────────────────────────────────
+
+# ── Core data ─────────────────────────────────────────────────
+pandas>=2.2.3
+numpy==1.26.4
+# RSI/MACD/ATR/OBV implemented manually in get_data.py (no pandas-ta dependency)
+
+# ── Data sources ──────────────────────────────────────────────
+yfinance>=0.2.50              # Yahoo Finance (crypto, equities, FX, futures)
+curl_cffi>=0.7                 # browser-impersonating session for yf.download (avoids Yahoo anti-bot blocks)
+fredapi==0.5.2                # FRED macroeconomic API
+requests>=2.32.3
+urllib3>=2.3.0                # used directly for Retry adapter
+tqdm>=4.66                    # progress bars for data download
+
+# ── Time & calendar ───────────────────────────────────────────
+python-dateutil>=2.9.0        # relativedelta for intraday window calc
+holidays>=0.60                # US holiday flag feature
+
+# ── Statistics & time series ──────────────────────────────────
+statsmodels>=0.14.4           # STL decomposition + SARIMAX
+scipy>=1.15.2                 # randint/uniform/loguniform dists + stats.probplot
+
+# ── Classical ML ──────────────────────────────────────────────
+scikit-learn==1.6.1
+
+# ── Hyperparameter search & experiment tracking ────────────────
+optuna>=3.6
+optuna-integration[wandb]>=3.6
+wandb>=0.17
+
+# ── Gradient boosting ─────────────────────────────────────────
+xgboost==3.0.0
+catboost==1.2.7
+lightgbm==4.6.0
+
+# ── Deep learning ─────────────────────────────────────────────
+torch                          # CryptoNet sequence models (LSTM/GRU/StackedLSTM/CNN_LSTM)
+captum>=0.6                    # Integrated Gradients attribution for CryptoNet (Phase 4 XAI)
+
+# ── Explainability ────────────────────────────────────────────
+shap>=0.46                     # TreeExplainer for GB models (requires numpy<2.0 with catboost)
+
+# ── Visualisation ─────────────────────────────────────────────
+matplotlib==3.10.1
+seaborn>=0.13.2
