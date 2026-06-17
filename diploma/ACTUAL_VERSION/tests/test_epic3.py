@@ -19,7 +19,8 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 
 from ml_models import focal_mw_bce
-from walk_forward import _gb_objective, _apply_gb_params, select_best_by_composite
+from walk_forward import (_gb_objective, _apply_gb_params, _gb_param_names,
+                          select_best_by_composite)
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -91,6 +92,41 @@ def test_gb_objective_tunes_full_space_and_finite(gb_data):
     assert {'lr', 'n_est'}.issubset(study.best_params)
     # хотя бы один структурный параметр, поддерживаемый HistGB
     assert {'max_depth', 'l2_regularization'} & set(study.best_params)
+    # HistGB-специфичные регуляризаторы тоже подбираются (компенсация subsample)
+    assert {'max_features', 'min_samples_leaf', 'max_leaf_nodes'} & set(study.best_params)
+
+
+# --- честный гейт тюнинга: get_params(), а не hasattr (CatBoost больше не пропускается) ---
+
+def test_param_gate_recognizes_catboost_via_get_params():
+    from catboost import CatBoostRegressor
+    # CatBoost.get_params() возвращает только ЯВНО заданные параметры -> гейт тюнит
+    # ровно то, что задано в GB_HYPERPARAMS (lr/iterations/depth/l2_leaf_reg).
+    names = _gb_param_names(CatBoostRegressor(
+        iterations=320, learning_rate=0.03, depth=6, l2_leaf_reg=3.0, verbose=False))
+    # раньше hasattr-гейт давал пусто -> CatBoost вообще не тюнился
+    assert {'learning_rate', 'iterations', 'depth', 'l2_leaf_reg'} <= names
+
+
+def test_apply_gb_params_tunes_catboost():
+    from catboost import CatBoostRegressor
+    model = Pipeline([('model', CatBoostRegressor(
+        iterations=320, learning_rate=0.03, depth=6, l2_leaf_reg=3.0, verbose=False))])
+    _apply_gb_params(model, {'lr': 0.07, 'n_est': 250, 'depth': 5, 'l2_leaf_reg': 4.0})
+    p = model.named_steps['model'].get_params()
+    assert p['learning_rate'] == 0.07
+    assert p['iterations'] == 250        # 'n_est' -> iterations
+    assert p['depth'] == 5
+    assert p['l2_leaf_reg'] == 4.0
+
+
+def test_apply_gb_params_histgb_regularizers():
+    model = _make_gb_factory()()         # HistGB pipeline
+    _apply_gb_params(model, {'max_features': 0.7, 'min_samples_leaf': 50, 'max_leaf_nodes': 31})
+    p = model.named_steps['model'].get_params()
+    assert p['max_features'] == 0.7
+    assert p['min_samples_leaf'] == 50
+    assert p['max_leaf_nodes'] == 31
 
 
 def test_apply_gb_params_applies_applicable_and_skips_missing():
