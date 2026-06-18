@@ -18,6 +18,9 @@ from __future__ import annotations
 import os
 from typing import Callable, Optional
 
+# Семейства, которые делят ОДИН GPU -> их нельзя гонять несколькими процессами разом.
+_GPU_FAMILIES = ('NN', 'NN_CLF')
+
 
 def _apply_thread_limit(n: Optional[int]) -> None:
     """Ограничить число потоков воркера ДО тяжёлых вычислений (анти-oversubscription)."""
@@ -112,3 +115,25 @@ def run_specs_parallel(specs, n_workers: int = 1, runner: Optional[Callable] = N
         return [run(s) for s in specs]
     from joblib import Parallel, delayed
     return Parallel(n_jobs=n_workers, backend='loky')(delayed(run)(s) for s in specs)
+
+
+def run_specs_grouped(specs, cpu_workers: int = 1, gpu_workers: int = 1,
+                      runner: Optional[Callable] = None):
+    """Раздельные проходы по семействам (фикс GPU-контеншна).
+
+    GB — CPU-bound: гоняется параллельно на `cpu_workers` процессах. NN/NN_CLF делят
+    ОДИН GPU, поэтому идут отдельным проходом на `gpu_workers` (по умолчанию 1 =
+    последовательно), иначе несколько процессов дерутся за единственную видеокарту и
+    воркер падает (`TerminatedWorkerError`). Порядок результатов соответствует `specs`.
+    """
+    gpu_pos = [j for j, s in enumerate(specs) if s.get('model_family') in _GPU_FAMILIES]
+    cpu_pos = [j for j, s in enumerate(specs) if s.get('model_family') not in _GPU_FAMILIES]
+
+    results: list = [None] * len(specs)
+    cpu_out = run_specs_parallel([specs[j] for j in cpu_pos], n_workers=cpu_workers, runner=runner)
+    for j, res in zip(cpu_pos, cpu_out):
+        results[j] = res
+    gpu_out = run_specs_parallel([specs[j] for j in gpu_pos], n_workers=gpu_workers, runner=runner)
+    for j, res in zip(gpu_pos, gpu_out):
+        results[j] = res
+    return results

@@ -13,7 +13,7 @@ import pytest
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 
-from parallel_run import build_run_specs, run_specs_parallel
+from parallel_run import build_run_specs, run_specs_parallel, run_specs_grouped
 
 
 def _frame(n=60):
@@ -103,3 +103,48 @@ def test_run_specs_parallel_loky():
     out = run_specs_parallel(specs, n_workers=2, runner=_double_runner)
     assert sorted(o[1] for o in out) == [0, 2, 4, 6]   # порядок сохраняется/полнота
     assert [o[1] for o in out] == [0, 2, 4, 6]
+
+
+# --------------------------------------------------------------------------
+# run_specs_grouped — раздельные проходы GB (CPU) / NN (GPU)
+# --------------------------------------------------------------------------
+
+def test_run_specs_grouped_preserves_input_order():
+    specs = [
+        {'model_family': 'GB', 'model_name': 'g0', 'x': 0},
+        {'model_family': 'NN', 'model_name': 'n0', 'x': 1},
+        {'model_family': 'GB', 'model_name': 'g1', 'x': 2},
+        {'model_family': 'NN_CLF', 'model_name': 'c0', 'x': 3},
+    ]
+    out = run_specs_grouped(specs, cpu_workers=2, gpu_workers=1, runner=_double_runner)
+    # порядок результатов = порядок входных спеков, несмотря на раздельные проходы
+    assert [o[0] for o in out] == ['g0', 'n0', 'g1', 'c0']
+    assert [o[1] for o in out] == [0, 2, 4, 6]
+
+
+def test_run_specs_grouped_routes_families_to_separate_passes(monkeypatch):
+    # GB-группа -> cpu_workers; NN/NN_CLF-группа -> gpu_workers (отдельным вызовом)
+    import parallel_run as pr
+    calls = []
+
+    def fake_parallel(specs, n_workers=1, runner=None):
+        calls.append((n_workers, sorted({s['model_family'] for s in specs}) if specs else []))
+        return [(s['model_name'], s['x'], None) for s in specs]
+
+    monkeypatch.setattr(pr, 'run_specs_parallel', fake_parallel)
+    specs = [
+        {'model_family': 'GB', 'model_name': 'g0', 'x': 0},
+        {'model_family': 'NN', 'model_name': 'n0', 'x': 1},
+        {'model_family': 'NN_CLF', 'model_name': 'c0', 'x': 2},
+    ]
+    pr.run_specs_grouped(specs, cpu_workers=5, gpu_workers=1)
+    cpu_call = [c for c in calls if c[1] == ['GB']]
+    gpu_call = [c for c in calls if c[1] and set(c[1]) <= {'NN', 'NN_CLF'}]
+    assert cpu_call and cpu_call[0][0] == 5      # GB -> cpu_workers
+    assert gpu_call and gpu_call[0][0] == 1      # NN/NN_CLF -> gpu_workers (последовательно)
+
+
+def test_run_specs_grouped_all_gb_no_gpu_pass():
+    specs = [{'model_family': 'GB', 'model_name': f'g{i}', 'x': i} for i in range(3)]
+    out = run_specs_grouped(specs, cpu_workers=2, gpu_workers=1, runner=_double_runner)
+    assert [o[0] for o in out] == ['g0', 'g1', 'g2']      # пустой GPU-проход не ломает порядок
