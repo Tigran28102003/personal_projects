@@ -23,7 +23,9 @@ reproduces every result from frozen CSV snapshots without network access. The su
 logic is organised into Python modules for data acquisition, walk-forward orchestration,
 models, validation, metrics, the backtest, and meta-labeling. A detailed component map and
 schematic of the training procedures is given in
-[`ACTUAL_VERSION/RAZBOR.md`](ACTUAL_VERSION/RAZBOR.md).
+[`ACTUAL_VERSION/RAZBOR.md`](ACTUAL_VERSION/RAZBOR.md), and a full technical description of
+the pipeline — what is learned, how, why, how PnL is computed, and the empirical results —
+in [`ACTUAL_VERSION/PIPELINE.md`](ACTUAL_VERSION/PIPELINE.md).
 
 ## Reproducibility
 
