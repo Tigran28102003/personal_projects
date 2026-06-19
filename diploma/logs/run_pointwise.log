@@ -1,0 +1,12 @@
+02:28:35 INFO src.data_io | features cache hit: /Users/tigran/python_projects_epta/personal_projects/diploma/data/processed/features_hourly.parquet
+02:28:35 INFO src.data_io | dataset[pointwise]: 5088 rows, 56 features, classes={-1: 938, 0: 3457, 1: 693}
+02:28:36 INFO src.data_io | dataset[pointwise]: 5088 rows, 56 features, classes={-1: 938, 0: 3457, 1: 693}
+02:28:36 INFO src.data_io | dataset[vol_scaled, k=1.5]: 5069 rows, 56 features, classes={-1: 410, 0: 4307, 1: 352}
+02:28:36 INFO src.data_io | dataset[triple_barrier]: 5088 rows, 56 features, classes={-1: 1779, 0: 1859, 1: 1450}
+02:31:50 INFO src.data_io | building features: 2024-12-01 -> 2026-06-01
+02:31:50 INFO src.data_io | raw snapshot: 13128 rows, sha256=a3311e17e93b
+02:31:51 INFO src.data_io | warmup drop: 13128 -> 12408 rows (-720, окно 720)
+02:31:52 INFO src.data_io | dataset[pointwise]: 12384 rows, 56 features, classes={-1: 1903, 0: 8718, 1: 1763}
+02:31:53 INFO src.data_io | dataset[pointwise]: 12384 rows, 56 features, classes={-1: 1903, 0: 8718, 1: 1763}
+02:31:53 INFO src.data_io | dataset[vol_scaled, k=1.5]: 12365 rows, 56 features, classes={-1: 891, 0: 10604, 1: 870}
+02:31:53 INFO src.data_io | dataset[triple_barrier]: 12384 rows, 56 features, classes={-1: 3721, 0: 5283, 1: 3380}

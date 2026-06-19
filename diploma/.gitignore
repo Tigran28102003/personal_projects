@@ -8,6 +8,15 @@ __pycache__/
 # redesign run-time artifacts (regenerable; frozen snapshots are kept)
 .free_features_cache/
 catboost_info/
-**/figures/*.png
+**/pictures/*.png
 **/reports/run_*/
 **/data/env_lock.txt
+
+.claude
+.pytest_cache
+.venv
+build_notebook.py
+run_full.py
+smoke_test.py
+tests
+reports

@@ -1,0 +1,53 @@
+# BTC 3-class direction forecasting (hourly, 24h horizon)
+# Pinned to the project venv (Python 3.11). No ccxt (Binance REST is reused),
+# no seaborn (matplotlib only). shap is optional (permutation importance is the
+# dependency-free primary attribution).
+
+# ── core ──────────────────────────────────────────────────────────────────
+numpy==1.26.4
+pandas==3.0.3
+scipy==1.17.1
+scikit-learn==1.6.1
+statsmodels==0.14.6
+
+# ── gradient boosting (base learner = LightGBM; xgboost/catboost only for the
+#    within-best-setup learner comparison) ───────────────────────────────────
+lightgbm==4.6.0
+xgboost==3.0.0
+catboost==1.2.7
+
+# ── hyperparameter search ──────────────────────────────────────────────────
+optuna==4.9.0
+
+# ── data sources (Binance REST via requests; Fear&Greed / CoinMetrics free) ──
+requests==2.34.2
+urllib3==2.7.0
+pyarrow==24.0.0
+tqdm==4.68.2
+python-dateutil==2.9.0.post0
+holidays==0.98
+
+# ── optional Yahoo cross-asset ablation group (729-day window) ───────────────
+yfinance==1.4.1
+curl_cffi==0.15.0
+fredapi==0.5.2
+
+# ── compute / parallelism (W1) ──────────────────────────────────────────────
+psutil==7.2.2          # CPU core detection + utilisation logging
+joblib==1.5.3          # loky process pool for parallel Optuna
+
+# ── neural nets (W8; learner-comparison, GPU P100) ───────────────────────────
+# torch — GPU path runs on the P100 box (CC 6.0 / sm_60). VERIFY the pinned build
+# ships Pascal sm_60 kernels before the FULL run (V3):
+#   python -c "import torch; print(torch.zeros(1,device='cuda'))"
+# If a newer wheel dropped sm_60, pin an older CC-6.0 build (e.g. torch 2.1.x cu118)
+# or document the fallback. Locally torch runs CPU/MPS (validated on CPU, V6).
+torch==2.12.0
+
+# ── visualisation ───────────────────────────────────────────────────────────
+matplotlib==3.10.1
+
+# ── optional (guarded imports; install on demand) ────────────────────────────
+# shap>=0.46          # SHAP beeswarm/dependence (permutation importance is primary)
+# pynvml>=11.5        # GPU utilisation logging on the P100 box
+# tabulate>=0.9       # prettier grid_summary.md tables

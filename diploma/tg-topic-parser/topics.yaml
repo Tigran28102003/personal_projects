@@ -1,0 +1,30 @@
+# Topic taxonomy for classification (financial / trader context).
+# The `id` values are the exact labels Claude must use. Edit freely:
+# add, remove, or reword descriptions and re-run `classify --reclassify`.
+topics:
+  - id: macro_economy
+    description: "Macro data and the economy: GDP, inflation/CPI, employment, PMIs, retail sales, sentiment."
+  - id: central_banks_rates
+    description: "Central banks and monetary policy: Fed/ECB/BoE, rate decisions, QT/QE, forward guidance."
+  - id: equities
+    description: "Stocks and equity indices: price moves, sectors, single names (non-earnings)."
+  - id: earnings
+    description: "Company earnings, results, guidance, pre-announcements."
+  - id: fixed_income_credit
+    description: "Bonds, yields, credit spreads, treasuries, issuance, defaults."
+  - id: fx
+    description: "Foreign exchange and currencies, including DXY and currency pairs."
+  - id: commodities
+    description: "Commodities: oil, gas, gold, metals, agriculture, energy."
+  - id: crypto
+    description: "Cryptocurrencies and digital assets: tokens, exchanges, on-chain activity."
+  - id: geopolitics
+    description: "Geopolitics: war, sanctions, elections, trade policy, tariffs."
+  - id: ma_corporate
+    description: "M&A and corporate actions: deals, buybacks, dividends, IPOs, spinoffs."
+  - id: flows_positioning
+    description: "Fund flows and positioning: options, gamma, COT, sentiment surveys."
+  - id: analyst_ratings
+    description: "Analyst ratings: upgrades/downgrades, price targets, initiations."
+  - id: other
+    description: "Anything that does not fit the categories above."

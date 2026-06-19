@@ -1,0 +1,19 @@
+# Secrets and session — never commit
+.env
+session/
+
+# Local data store and derived artifacts
+data.db
+data.db-journal
+data.db-wal
+data.db-shm
+media/
+exports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
