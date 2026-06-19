@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import t as _student_t
 
+from . import config
 from .har import MODELS
 
 
@@ -79,18 +80,19 @@ def r2_log(y_true, y_pred) -> float:
     return float(1.0 - ss_res / ss_tot)
 
 
-def summarize_models(oof: pd.DataFrame) -> pd.DataFrame:
+def summarize_models(oof: pd.DataFrame, dm_h: int = 1) -> pd.DataFrame:
     """One row per model: QLIKE (variance scale), R²-logRV, QLIKE improvement vs RW (%), and
     Diebold-Mariano(HLN) significance of each model's QLIKE loss vs RW and vs AR1
-    (``DM_*_stat`` < 0 with ``DM_*_p`` < 0.05 ⇒ the model is significantly better)."""
+    (``DM_*_stat`` < 0 with ``DM_*_p`` < 0.05 ⇒ the model is significantly better). ``dm_h`` is the
+    forecast horizon, passed to the HLN correction / HAC lag (h-step losses are MA(h−1)-correlated)."""
     y_rv = oof["y_rv"]
     rw_loss = qlike_series(y_rv, oof["RW_rv"])
     ar1_loss = qlike_series(y_rv, oof["AR1_rv"])
     rows = []
     for m in MODELS:
         m_loss = qlike_series(y_rv, oof[f"{m}_rv"])
-        dm_rw = diebold_mariano(m_loss, rw_loss) if m != "RW" else (np.nan, np.nan)
-        dm_ar1 = diebold_mariano(m_loss, ar1_loss) if m not in ("RW", "AR1") else (np.nan, np.nan)
+        dm_rw = diebold_mariano(m_loss, rw_loss, h=dm_h) if m != "RW" else (np.nan, np.nan)
+        dm_ar1 = diebold_mariano(m_loss, ar1_loss, h=dm_h) if m not in ("RW", "AR1") else (np.nan, np.nan)
         rows.append({"model": m,
                      "QLIKE": qlike(y_rv, oof[f"{m}_rv"]),
                      "R2_logRV": r2_log(oof["y_logrv"], oof[f"{m}_logrv"]),
@@ -100,3 +102,21 @@ def summarize_models(oof: pd.DataFrame) -> pd.DataFrame:
     rw_q = float(df.loc[df["model"] == "RW", "QLIKE"].iloc[0])
     df["QLIKE_vs_RW_pct"] = (rw_q - df["QLIKE"]) / abs(rw_q) * 100.0   # >0 = better than RW
     return df.sort_values("QLIKE").reset_index(drop=True)
+
+
+def multi_horizon_summary(frame: pd.DataFrame, horizons=config.HAR_HORIZONS,
+                          n_splits: int = config.WF_N_SPLITS, embargo: int = 5) -> pd.DataFrame:
+    """Direct multi-horizon HAR-vs-naive table. For each h the target is the **average** RV over
+    [t+1, t+h] (Corsi direct forecasting); each horizon is scored with its own horizon-aware
+    Diebold-Mariano(HLN). Returns a tidy frame with a leading ``horizon`` column.
+
+    Pre-stated expectation (not tuned): HAR's edge over AR1 is insignificant at h=1 and should
+    strengthen at h=5, 22 (long memory matters more for the cumulative path than for one day)."""
+    from .har import walk_forward_oof
+    parts = []
+    for h in horizons:
+        oof = walk_forward_oof(frame, h=h, n_splits=n_splits, embargo=embargo)
+        t = summarize_models(oof, dm_h=h)
+        t.insert(0, "horizon", int(h))
+        parts.append(t)
+    return pd.concat(parts, ignore_index=True)

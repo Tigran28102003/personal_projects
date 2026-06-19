@@ -86,3 +86,33 @@ def test_jensen_correction_makes_level_unbiased_ish():
     oof = harmod.walk_forward_oof(f, n_splits=5, embargo=5)
     for m in harmod.MODELS:
         assert (oof[f"{m}_rv"].dropna() > 0).all()
+
+
+def test_multi_horizon_target_is_forward_average_rv():
+    f = _rv_frame()
+    h = 5
+    X = harmod.har_components_h(f, h=h)
+    # target at day t == log(mean(RV_{t+1..t+h})); check an interior day explicitly
+    t = 50
+    expect = np.log(f["rv"].iloc[t + 1: t + 1 + h].mean())
+    assert X["target"].iloc[t] == pytest.approx(expect, rel=1e-9)
+    # last h days have no full forward window -> NaN target
+    assert X["target"].iloc[-h:].isna().all()
+
+
+def test_h1_reduces_to_single_horizon():
+    f = _rv_frame(500)
+    a = harmod.walk_forward_oof(f, n_splits=5, embargo=5)            # default h=1
+    b = harmod.walk_forward_oof(f, h=1, n_splits=5, embargo=5)       # explicit h=1
+    assert a.shape == b.shape
+    np.testing.assert_allclose(a["HARQ_rv"].to_numpy(), b["HARQ_rv"].to_numpy(), rtol=1e-12)
+
+
+def test_multi_horizon_summary_has_horizons_and_dm():
+    f = _rv_frame(700)
+    mh = ve.multi_horizon_summary(f, horizons=(1, 5, 22), n_splits=5, embargo=5)
+    assert set(mh["horizon"]) == {1, 5, 22}
+    assert {"DM_vs_RW_stat", "DM_vs_RW_p", "DM_vs_AR1_stat", "DM_vs_AR1_p"} <= set(mh.columns)
+    # every horizon reports all models
+    for h in (1, 5, 22):
+        assert set(mh.loc[mh["horizon"] == h, "model"]) == set(harmod.MODELS)

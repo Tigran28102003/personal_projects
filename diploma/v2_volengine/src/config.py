@@ -31,7 +31,11 @@ SPOT_MANIFEST = DATA_DIR / "spot_ohlc_manifest.json"
 ENV_LOCKFILE = DATA_DIR / "env_lock.txt"
 
 # Attach the sibling legacy library + the v2 package explicitly; fail loud on a wrong layout.
-for _p in (LEGACY_LIB, REPO_ROOT):
+# Order matters: LEGACY_LIB must end up AHEAD of REPO_ROOT so flat legacy modules (walk_forward,
+# ml_models, free_features, get_data) resolve to ACTUAL_VERSION — the repo root still carries stale
+# pre-reorg duplicates (ml_models.py/get_data.py) that would otherwise shadow them. The package
+# namespaces (v2_volengine, v2_microstructure) live only at REPO_ROOT, so they resolve regardless.
+for _p in (REPO_ROOT, LEGACY_LIB):                 # inserted at 0 in turn → LEGACY_LIB ends in front
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 assert (LEGACY_LIB / "free_features.py").exists(), (
@@ -72,6 +76,7 @@ MIN_BARS_KEEP = 12                               # days with < this many hourly 
 # --------------------------------------------------------------------------- HAR baselines (L1)
 HAR_WINDOWS = (1, 5, 22)                         # Corsi daily / weekly / monthly
 HAR_VARIANTS = ("HAR", "HARJ", "HARQ")          # HARQ central (R2)
+HAR_HORIZONS = (1, 5, 22)                        # direct multi-horizon forecast of mean RV over [t+1,t+h]
 
 # --------------------------------------------------------------------------- samples (R1 discipline)
 # HAR baseline + Gate 2 on the FULL spot history; Gate 1 (ML+exo vs HAR) on the perp-era subsample
