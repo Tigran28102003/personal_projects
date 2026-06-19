@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from . import (config, rv as rvmod, har as harmod, vol_evaluate as ve,
-               features_vol as fv, tripwires_vol as tw)
+               features_vol as fv, tripwires_vol as tw, vol_model as vm)
 from .data_spot import load_spot_snapshot
 from v2_microstructure.src.data_snapshot import load_snapshot as load_exo_snapshot
 
@@ -164,13 +164,77 @@ def run_m2_features(estimator: str = config.RV_ESTIMATOR, top_k: int = 10) -> di
     return {"run_id": run_id, "selected": selected, "summary": summary, "bounds": gate_bounds}
 
 
+def run_m3_gate1(estimator: str = config.RV_ESTIMATOR) -> dict:
+    """A-M3: ML ladder (HARQ → Ridge(HAR+exo) → LightGBM) on the perp-era 2019→ gate subsample +
+    Gate 1 (forecasting). Both arms share identical rows/folds. Diebold-Mariano(HLN) primary +
+    paired-bootstrap Δ-CI complement, distributional over CPCV. No holdout touch, no M4/M5."""
+    config.ensure_dirs()
+    run_id = datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%SZ")
+    rdir = config.REPORTS_DIR / run_id
+    rdir.mkdir(parents=True, exist_ok=True)
+
+    spot, exo = load_spot_snapshot(), load_exo_snapshot()
+    spot_sha = json.loads(config.SPOT_MANIFEST.read_text()).get("content_sha256")
+    exo_sha = json.loads((config.V2_MICRO / "data" / "snapshot_manifest.json").read_text()).get("content_sha256")
+
+    X, groups = fv.build_feature_matrix(spot, estimator=estimator, exo_hourly=exo)
+    X_dev = fv.dev_matrix(X)                                  # perp-era dev (holdout sealed)
+    ml_cols = groups["all"]                                   # full candidate set (no selection leak)
+
+    # headline WF-OOF ladder table (clean, non-overlapping) + distributional CPCV gate
+    oof = vm.wf_oof_forecasts(X_dev, ml_cols)
+    ladder = ve.summarize_arms(oof)
+    ladder.to_csv(rdir / "m3_ladder_wf_oof.csv", index=False)
+    paths = vm.cpcv_arm_losses(X_dev, ml_cols)
+    gates = {a: ve.gate1_forecasting(paths, ml_arm=a) for a in vm.ML_ARMS}
+    any_pass = any(g["passed"] for g in gates.values())
+
+    bounds = {"perp_era_start": config.PERP_ERA_START, "dev_start": str(X_dev.index.min()),
+              "dev_end": str(X_dev.index.max()), "holdout_cut": config.HOLDOUT_CUT,
+              "n_dev_rows": int(len(X_dev)), "n_oof_rows": int(len(oof)), "n_cpcv_paths": len(paths)}
+    manifest = {
+        "run_id": run_id, "milestone": "A-M3",
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "seed": config.SEED, "estimator": estimator,
+        "spot_snapshot_sha256": spot_sha, "exo_snapshot_sha256": exo_sha,
+        "env_lock_sha256": _env_lock_sha(),
+        "gate_subsample": bounds, "ml_candidate_features": ml_cols, "harq_baseline": vm.HARQ_COLS,
+        "config": {"cpcv_N": config.CPCV_N, "cpcv_k": config.CPCV_K, "ridge_alpha": config.RIDGE_ALPHA,
+                   "dm_alpha": config.DM_ALPHA, "gate1_cpcv_majority": config.GATE1_CPCV_MAJORITY,
+                   "gate_delta_margin": config.GATE_DELTA_MARGIN, "ci": config.GATE_BOOTSTRAP_CI,
+                   "n_bootstrap": config.n_bootstrap(), "quick_mode": config.QUICK_MODE,
+                   "lgbm_n_estimators": config.lgbm_n_estimators()},
+        "ladder_wf_oof": ladder.to_dict(orient="records"),
+        "gate1": gates, "gate1_any_pass": any_pass,
+    }
+    (rdir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+
+    print(f"run_id={run_id}")
+    print(f"gate subsample (perp-era dev): {bounds['dev_start']} → {bounds['dev_end']} "
+          f"| dev_rows={bounds['n_dev_rows']} oof_rows={bounds['n_oof_rows']} cpcv_paths={bounds['n_cpcv_paths']}")
+    print(f"HARQ baseline: {vm.HARQ_COLS}")
+    print(f"ML candidate features ({len(ml_cols)}): {ml_cols}")
+    print(f"QUICK_MODE={config.QUICK_MODE} (lgbm n_est={config.lgbm_n_estimators()}, n_boot={config.n_bootstrap()})")
+    print("\n=== M3 ladder (WF-OOF) — QLIKE / R²-logRV / DM(HLN) vs HARQ ===")
+    print(ladder.round(4).to_string(index=False))
+    print("\n=== Gate 1 (forecasting) — distributional over CPCV ===")
+    for a, g in gates.items():
+        print(f"  [{a} vs HARQ] majority_DM_sig={g['majority_DM_sig']:.2f} "
+              f"majority_QLIKE_win={g['majority_QLIKE_win']:.2f} "
+              f"ΔQLIKE_mean={g['mean_delta_qlike']:.5f} Δ-CI=[{g['delta_ci_low']:.5f},{g['delta_ci_high']:.5f}] "
+              f"→ {'PASS' if g['passed'] else 'FAIL'}  ({g['verdict']})")
+    print(f"\n=== A-M3 Gate 1: {'ML+exo ADDS value' if any_pass else 'ML NULL — HAR stands'} ===")
+    print(f"artifacts: {rdir}")
+    return {"run_id": run_id, "ladder": ladder, "gate1": gates, "any_pass": any_pass, "bounds": bounds}
+
+
 def _main(argv=None) -> int:
     import argparse
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    p = argparse.ArgumentParser(description="Vol-Engine experiment (M1 baselines / M2 features).")
-    p.add_argument("cmd", choices=["m1", "m2"], nargs="?", default="m1")
+    p = argparse.ArgumentParser(description="Vol-Engine experiment (M1 baselines / M2 features / M3 gate).")
+    p.add_argument("cmd", choices=["m1", "m2", "m3"], nargs="?", default="m1")
     args = p.parse_args(argv)
-    run_har_baselines() if args.cmd == "m1" else run_m2_features()
+    {"m1": run_har_baselines, "m2": run_m2_features, "m3": run_m3_gate1}[args.cmd]()
     return 0
 
 

@@ -120,3 +120,74 @@ def multi_horizon_summary(frame: pd.DataFrame, horizons=config.HAR_HORIZONS,
         t.insert(0, "horizon", int(h))
         parts.append(t)
     return pd.concat(parts, ignore_index=True)
+
+
+# --------------------------------------------------------------------------- A-M3: ML ladder + Gate 1
+def paired_bootstrap_ci(diff, ci: float = config.GATE_BOOTSTRAP_CI, n_boot: int | None = None,
+                        seed: int = config.SEED):
+    """Two-sided bootstrap CI for the mean paired difference (resample paths with replacement).
+    ``n_boot`` defaults to config.n_bootstrap() (QUICK vs FULL). Returns (mean, lo, hi)."""
+    n_boot = config.n_bootstrap() if n_boot is None else n_boot
+    d = np.asarray(diff, dtype=float)
+    d = d[np.isfinite(d)]
+    if d.size < 2:
+        return float("nan"), float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    means = d[rng.integers(0, d.size, size=(n_boot, d.size))].mean(axis=1)
+    lo = float(np.percentile(means, 100 * (1 - ci) / 2))
+    hi = float(np.percentile(means, 100 * (1 + ci) / 2))
+    return float(d.mean()), lo, hi
+
+
+def summarize_arms(oof: pd.DataFrame, arms=("HARQ", "Ridge", "LGBM"), base: str = "HARQ") -> pd.DataFrame:
+    """Headline WF-OOF table for the M3 ladder: QLIKE, R²-logRV, and Diebold-Mariano(HLN) of each
+    arm's QLIKE loss vs the HAR baseline (``DM_vs_base_stat`` < 0 & p < α ⇒ arm beats HARQ)."""
+    y_rv = oof["y_rv"]
+    base_loss = qlike_series(y_rv, oof[f"{base}_rv"])
+    rows = []
+    for a in arms:
+        a_loss = qlike_series(y_rv, oof[f"{a}_rv"])
+        dm = diebold_mariano(a_loss, base_loss, h=1) if a != base else (np.nan, np.nan)
+        rows.append({"arm": a, "QLIKE": qlike(y_rv, oof[f"{a}_rv"]),
+                     "R2_logRV": r2_log(oof["y_logrv"], oof[f"{a}_logrv"]),
+                     "DM_vs_base_stat": dm[0], "DM_vs_base_p": dm[1]})
+    df = pd.DataFrame(rows)
+    base_q = float(df.loc[df["arm"] == base, "QLIKE"].iloc[0])
+    df["QLIKE_vs_base_pct"] = (base_q - df["QLIKE"]) / abs(base_q) * 100.0   # >0 = better than HARQ
+    return df
+
+
+def gate1_forecasting(paths, ml_arm: str, base_arm: str = "HARQ") -> dict:
+    """Pre-registered Gate 1 (forecasting): does ML+exo beat the HAR baseline on QLIKE?
+
+    Distributional over CPCV paths. **Primary** = Diebold-Mariano(HLN) significant in ML's favour
+    (stat < 0 & p < DM_ALPHA) on a **majority** of paths. **Complement** = paired-bootstrap Δ-CI of
+    the per-path mean QLIKE difference (base − ml; >0 ⇒ ml better) with lower bound > margin.
+    Both must hold to pass; otherwise ML adds nothing and HAR stands (no tune-to-pass)."""
+    sig, wins, deltas = [], [], []
+    for p in paths:
+        lb, lm = p[base_arm], p[ml_arm]
+        stat, pval = diebold_mariano(lm, lb, h=1)            # stat < 0 ⇒ ml lower loss (better)
+        sig.append(bool(np.isfinite(stat) and stat < 0 and pval < config.DM_ALPHA))
+        d = float(np.nanmean(lb) - np.nanmean(lm))           # >0 ⇒ ml better
+        deltas.append(d)
+        wins.append(d > 0)
+    deltas = np.asarray(deltas, dtype=float)
+    n = int(deltas.size)
+    majority_sig = float(np.mean(sig)) if n else float("nan")
+    majority_win = float(np.mean(wins)) if n else float("nan")
+    mean_d, lo, hi = paired_bootstrap_ci(deltas)
+    primary = bool(n and majority_sig > config.GATE1_CPCV_MAJORITY)
+    complement = bool(np.isfinite(lo) and lo > config.GATE_DELTA_MARGIN)
+    passed = bool(primary and complement)
+    return {
+        "ml_arm": ml_arm, "base_arm": base_arm, "loss": "QLIKE", "n_paths": n,
+        "majority_DM_sig": majority_sig, "majority_QLIKE_win": majority_win,
+        "mean_delta_qlike": mean_d, "delta_ci_low": lo, "delta_ci_high": hi,
+        "ci_level": config.GATE_BOOTSTRAP_CI, "dm_alpha": config.DM_ALPHA,
+        "majority_threshold": config.GATE1_CPCV_MAJORITY, "delta_margin": config.GATE_DELTA_MARGIN,
+        "primary_pass_DM_majority": primary, "complement_pass_bootstrap_ci": complement,
+        "passed": passed,
+        "verdict": (f"{ml_arm} beats HARQ — ML+exo adds forecast value" if passed
+                    else f"{ml_arm} does NOT beat HARQ — ML null, HAR stands (Layer-1 deliverable)"),
+    }

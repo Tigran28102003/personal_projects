@@ -92,9 +92,10 @@ WF_MIN_TRAIN_FRAC = 0.5
 
 # --------------------------------------------------------------------------- Gate 1 (forecasting)
 # ML+exo beats HAR family on QLIKE: Diebold-Mariano (HLN) primary + paired-bootstrap Δ-CI complement,
-# distributional over CPCV paths.
+# distributional over CPCV paths. ML ladder: HARQ baseline → Ridge(HAR+exo) → LightGBM(reg).
 DM_ALPHA = 0.05                                  # Diebold-Mariano significance (HLN-corrected)
 GATE1_CPCV_MAJORITY = 0.5                        # ML must win QLIKE on > 50% of paths
+RIDGE_ALPHA = 1.0                                # L2 strength for the Ridge(HAR+exo) rung (std features)
 
 # --------------------------------------------------------------------------- Gate 2 (economics)
 # vol-timing net-cost Sharpe > buy&hold, distributional over CPCV paths.
