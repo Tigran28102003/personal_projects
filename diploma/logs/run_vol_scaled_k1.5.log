@@ -1,0 +1,5 @@
+02:37:32 INFO src.data_io | features cache hit: /Users/tigran/python_projects_epta/personal_projects/diploma/data/processed/features_hourly.parquet
+02:37:32 INFO src.data_io | dataset[vol_scaled, k=1.5]: 12365 rows, 56 features, classes={-1: 891, 0: 10604, 1: 870}
+02:37:34 INFO src.data_io | dataset[pointwise]: 12384 rows, 56 features, classes={-1: 1903, 0: 8718, 1: 1763}
+02:37:34 INFO src.data_io | dataset[vol_scaled, k=1.5]: 12365 rows, 56 features, classes={-1: 891, 0: 10604, 1: 870}
+02:37:34 INFO src.data_io | dataset[triple_barrier]: 12384 rows, 56 features, classes={-1: 3721, 0: 5283, 1: 3380}

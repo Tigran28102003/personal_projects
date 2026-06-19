@@ -1,0 +1,5 @@
+# Public Telegram channels to parse.
+# Add usernames (with or without a leading @), one per line.
+channels:
+  - "@buyside"
+  - "@headlines_for_traders"
