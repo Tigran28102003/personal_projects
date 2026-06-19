@@ -1,0 +1,60 @@
+# requirements.txt — v2_microstructure (direction C: microstructure/flow + triple-barrier + meta-label)
+# Pinned to the versions used to build & run the package. Python 3.11 (tested on 3.11.15).
+#
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r v2_microstructure/requirements.txt
+#
+# Note on scope: direction-C logic itself only needs the "core" + "tabular ML" + "stats" +
+# "I/O" + "plotting" groups. The deep-learning / HPO / logging stack (torch, optuna,
+# optuna-integration, wandb, xgboost, catboost) is pulled in TRANSITIVELY because the legacy
+# library `ACTUAL_VERSION/ml_models.py` hard-imports it at module load, and
+# `v2_microstructure` imports the legacy `walk_forward` (which imports `ml_models`). They are
+# required to import the legacy library as-is, even though the C pipeline does not train NNs.
+
+# --- core numeric / data ---
+numpy==1.26.4
+pandas==3.0.3
+scipy==1.17.1
+
+# --- tabular ML ---
+scikit-learn==1.6.1
+lightgbm==4.6.0
+xgboost==3.0.0            # transitive via ml_models
+catboost==1.2.7           # transitive via ml_models
+
+# --- stats / time series (fracdiff ADF, etc.) ---
+statsmodels==0.14.6
+
+# --- deep learning (transitive via ml_models / set_global_seed) ---
+torch==2.12.0
+
+# --- HPO / experiment logging (transitive via ml_models) ---
+optuna==4.9.0
+optuna-integration==4.9.0
+wandb==0.27.2
+
+# --- plotting (figures/) ---
+matplotlib==3.10.1
+
+# --- I/O & web (live snapshot fetch from Binance / Coin Metrics) ---
+requests==2.34.2
+urllib3==2.7.0
+pyarrow==24.0.0           # frozen snapshot parquet (load/build/hash)
+
+# --- legacy get_data indicators (preferred RSI/MACD path; features.py falls back to an
+#     inline implementation if these are absent, so they are optional but reproduce the
+#     exact control-arm indicators used) ---
+yfinance==1.4.1
+fredapi==0.5.2
+curl_cffi==0.15.0
+holidays==0.98
+tqdm==4.68.2
+python-dateutil==2.9.0.post0
+
+# --- notebook execution (only to run v2_microstructure/notebooks/run_direction_c.ipynb) ---
+nbconvert==7.17.1
+nbformat==5.10.4
+ipykernel==7.2.0
+ipython==9.14.0
+jupyter-client==8.8.0
+jupyter-core==5.9.1
