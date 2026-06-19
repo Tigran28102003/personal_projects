@@ -26,11 +26,17 @@ from . import config
 _LOG2 = np.log(2.0)
 
 
-def realized_measures(spot: pd.DataFrame, short_day_policy: str = "scale") -> pd.DataFrame:
+def realized_measures(spot: pd.DataFrame, short_day_policy: str = "scale",
+                      min_bars_keep: int = config.MIN_BARS_KEEP) -> pd.DataFrame:
     """Daily realized measures from hourly OHLC. Index = UTC date.
 
     Columns: rv_close, rv_gk, rv_rs, rq (realized quarticity), bpv, jump, rv_plus, rv_minus, n_bars.
-    ``short_day_policy``: 'scale' (×BARS_PER_DAY/n_bars on Σ-over-bar measures; default), 'drop', 'keep'.
+    ``short_day_policy``:
+      * 'scale' (default, HYBRID) — **drop** severely-short days (< ``min_bars_keep`` bars) and
+        rescale only mildly-short days (×BARS_PER_DAY/n_bars). A 1-bar "RV" scaled to a daily figure
+        is a fabricated outlier (HARQ is quarticity-sensitive), so severe days are removed, not scaled;
+      * 'drop' — keep only full (24-bar) days;
+      * 'keep' — no adjustment (used in tests / fidelity checks).
     """
     o, h, l, c = (spot[x].astype(float) for x in ("open", "high", "low", "close"))
     r = np.log(c).diff()                                   # 24/7 hourly log-return (cross-day incl.)
@@ -53,13 +59,15 @@ def realized_measures(spot: pd.DataFrame, short_day_policy: str = "scale") -> pd
     out["rv_minus"] = g_r.apply(lambda x: np.nansum(np.where(x.values < 0, x.values, 0.0) ** 2))
 
     sum_cols = ["rv_close", "rv_gk", "rv_rs", "rq", "bpv", "jump", "rv_plus", "rv_minus"]
+    if short_day_policy == "keep":
+        return out
     if short_day_policy == "drop":
-        out = out[out["n_bars"] >= config.BARS_PER_DAY]
-    elif short_day_policy == "scale":
-        factor = (config.BARS_PER_DAY / out["n_bars"]).clip(upper=config.BARS_PER_DAY)
-        out.loc[out["n_bars"] < config.BARS_PER_DAY, sum_cols] = \
-            out.loc[out["n_bars"] < config.BARS_PER_DAY, sum_cols].mul(
-                factor[out["n_bars"] < config.BARS_PER_DAY], axis=0)
+        return out[out["n_bars"] >= config.BARS_PER_DAY]
+    # "scale" == HYBRID: drop severely-short days, rescale only mildly-short ones
+    out = out[out["n_bars"] >= min_bars_keep]
+    mild = out["n_bars"] < config.BARS_PER_DAY
+    factor = config.BARS_PER_DAY / out["n_bars"]
+    out.loc[mild, sum_cols] = out.loc[mild, sum_cols].mul(factor[mild], axis=0)
     return out
 
 
@@ -138,6 +146,43 @@ def cross_check_5min(start, end, hourly_spot: pd.DataFrame | None = None) -> dic
         "ratio_iqr": [q1, q3],
         "note": "hourly RV vs 5-min RV on full days; ratio≠1 + dispersion quantify hourly measurement error (R2)",
     }
+
+
+def estimator_fidelity_5min(start, end, hourly_spot: pd.DataFrame | None = None) -> dict:
+    """Model-free choice of RV_ESTIMATOR (A-M0): which hourly estimator best tracks 5-min RV.
+
+    Reference = 5-min close-RV (the better-measured truth proxy) on full days. We compare hourly
+    **close-RV** vs hourly **Rogers-Satchell range-RV** by log-RV correlation and log RMSE to the
+    reference. Winner = higher corr AND lower RMSE; otherwise 'both' (within noise). This is a
+    measurement-fidelity decision, NOT a forecast-R² decision (that would be forking).
+    """
+    from .data_spot import fetch_spot_ohlc, load_spot_snapshot
+    if hourly_spot is None:
+        hourly_spot = load_spot_snapshot()
+    five = fetch_spot_ohlc(interval="5m", start=start, end=end)
+    hourly = hourly_spot.loc[str(start):str(end)]
+    n5 = five.groupby(five.index.normalize()).size()
+    nh = hourly.groupby(hourly.index.normalize()).size()
+    full = n5.index[(n5 >= 288) & (nh.reindex(n5.index, fill_value=0) >= config.BARS_PER_DAY)]
+    ref = np.log(_daily_rv_close(five).reindex(full).clip(lower=config.RV_FLOOR))
+    m = realized_measures(hourly, short_day_policy="keep")
+
+    def _fid(rv_series):
+        x = np.log(rv_series.reindex(full).clip(lower=config.RV_FLOOR))
+        d = pd.concat([x, ref], axis=1).dropna()
+        corr = float(d.iloc[:, 0].corr(d.iloc[:, 1]))
+        rmse = float(np.sqrt(((d.iloc[:, 0] - d.iloc[:, 1]) ** 2).mean()))
+        return {"logrv_corr": corr, "logrv_rmse": rmse}
+
+    fc, fr = _fid(m["rv_close"]), _fid(m["rv_rs"])
+    if fr["logrv_corr"] > fc["logrv_corr"] and fr["logrv_rmse"] < fc["logrv_rmse"]:
+        winner = "range"
+    elif fc["logrv_corr"] > fr["logrv_corr"] and fc["logrv_rmse"] < fr["logrv_rmse"]:
+        winner = "close"
+    else:
+        winner = "both"
+    return {"n_full_days": int(len(full)), "reference": "5min_close_rv",
+            "close": fc, "range_rogers_satchell": fr, "winner": winner}
 
 
 def rv_report(frame: pd.DataFrame) -> dict:

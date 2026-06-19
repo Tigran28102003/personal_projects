@@ -59,10 +59,15 @@ DAYS_PER_YEAR = 365                              # annualisation for daily-RV / 
 # (≈2019-09→); read via v2_microstructure.src.data_snapshot.load_snapshot().
 
 # --------------------------------------------------------------------------- RV / target (L1)
-RV_ESTIMATOR = "close"                           # "close" (Σ Δlogclose²) | "range" (Σ Garman-Klass/RS)
-RV_RANGE_METHOD = "garman_klass"                 # if RV_ESTIMATOR == "range": garman_klass | rogers_satchell
+RV_ESTIMATOR = "range"                            # A-M0 5-min fidelity test winner (RS: corr 0.980 / rmse 0.161
+#                                                   vs close 0.921 / 0.393). "close" carried as M1 robustness arm.
+RV_RANGE_METHOD = "rogers_satchell"              # drift-robust (BTC trends) — preferred over Garman-Klass
 TARGET_TRANSFORM = "log"                         # "log" (primary) | "sqrt"
 RV_FLOOR = 1e-12                                 # numerical floor before log
+MIN_BARS_KEEP = 12                               # days with < this many hourly bars are DROPPED (not scaled);
+#                                                  mildly-short days (>=MIN_BARS_KEEP, <24) are rescaled. A
+#                                                  1-bar "RV" scaled to a daily figure is a fabricated outlier
+#                                                  (HARQ is quarticity-sensitive) — so drop the severe ones.
 
 # --------------------------------------------------------------------------- HAR baselines (L1)
 HAR_WINDOWS = (1, 5, 22)                         # Corsi daily / weekly / monthly
