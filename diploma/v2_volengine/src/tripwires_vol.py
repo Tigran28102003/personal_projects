@@ -26,7 +26,12 @@ from v2_microstructure.src.tripwires import (  # noqa: E402
 def label_shuffle_reg(X: pd.DataFrame, y: np.ndarray,
                       fit_predict_fn: Callable[[pd.DataFrame, np.ndarray, pd.DataFrame], np.ndarray],
                       *, tol: float = 0.05, seed: int = config.SEED) -> dict:
-    """Train on a permuted RV target; OOS R² must collapse to ~0. ``fit_predict_fn(Xtr,ytr,Xev)->yhat``."""
+    """Train on a permuted RV target; OOS R² must NOT be significantly positive.
+
+    ``fit_predict_fn(Xtr,ytr,Xev)->yhat``. A leak would let the model predict the shuffled target
+    (R² > tol). A negative R² (worse than the mean) is the expected no-signal outcome and PASSES —
+    so the criterion is ``r2 <= tol``, not ``|r2| <= tol``.
+    """
     rng = np.random.default_rng(seed)
     n = len(y)
     cut = int(0.7 * n)
@@ -37,7 +42,8 @@ def label_shuffle_reg(X: pd.DataFrame, y: np.ndarray,
     ss_res = float(np.sum((yt - yhat) ** 2))
     ss_tot = float(np.sum((yt - yt.mean()) ** 2)) or 1.0
     r2 = 1.0 - ss_res / ss_tot
-    return {"check": "label_shuffle_reg", "passed": abs(r2) <= tol, "shuffled_r2": r2, "tol": tol}
+    return {"check": "label_shuffle_reg", "passed": r2 <= tol, "shuffled_r2": r2, "tol": tol,
+            "note": "leak == shuffled R² > tol; negative R² = no signal (pass)"}
 
 
 def bars_per_day_guard(spot: pd.DataFrame, min_frac_full: float = 0.95) -> dict:
