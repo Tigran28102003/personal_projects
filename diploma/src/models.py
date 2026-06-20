@@ -27,6 +27,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import KFold
 
@@ -44,7 +45,13 @@ def _lgbm(params: Optional[dict] = None, objective: str = "binary", num_class: i
     num_threads/n_jobs берутся из COMPUTE_CFG (W1: один-поточные фиты, параллель — снаружи)."""
     p = dict(config.LGBM_DETERMINISTIC)
     lt = int(config.COMPUTE_CFG.get("lgbm_threads", 1))
-    p.update({"n_estimators": 200, "learning_rate": 0.05, "num_leaves": 31,
+    # Регуляризованный ДЕФОЛТ: мелкие деревья, высокий min_child, сабсэмплинг
+    # строк/колонок, L1/L2 — чтобы default-путь (params={}) сам по себе не
+    # переобучался при низком SNR. Optuna при желании переопределяет любой ключ.
+    p.update({"n_estimators": 600, "learning_rate": 0.05,
+              "num_leaves": 31, "max_depth": 6, "min_child_samples": 100,
+              "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8,
+              "reg_alpha": 0.1, "reg_lambda": 1.0,
               "n_jobs": lt, "num_threads": lt})
     if params:
         p.update(params)
@@ -60,6 +67,43 @@ def _prep_X(X):
     """float32-матрица фич (W1: вдвое меньше RAM, быстрее на малых данных; имена сохранены).
     NaN сохраняются (деревья кодируют нативно)."""
     return pd.DataFrame(X).astype("float32")
+
+
+def _es_split(n: int, val_frac: float = 0.15, gap: Optional[int] = None):
+    """Хронологический хвост под early stopping: последние ``val_frac`` строк как eval,
+    с purge-зазором ``gap`` (по умолчанию HORIZON) между обучающей частью и eval —
+    чтобы перекрывающиеся 24h-метки не утекали в критерий ранней остановки.
+    Возвращает ``(fit_idx, val_idx)`` либо ``(arange(n), None)``, если данных мало."""
+    gap = config.HORIZON if gap is None else int(gap)
+    n_val = int(n * val_frac)
+    if n_val < 50 or (n - n_val - gap) < 100:
+        return np.arange(n), None
+    val_idx = np.arange(n - n_val, n)
+    fit_idx = np.arange(0, n - n_val - gap)
+    return fit_idx, val_idx
+
+
+def _fit_es(model, X, y, sample_weight, eval_metric: str):
+    """Фит LightGBM c early stopping на purged-хвосте трейна (число деревьев выбирается
+    по фолду, а не задаётся жёстко n_estimators). Вырожденный хвост (один класс) или
+    слишком малая выборка -> обычный фит без ранней остановки."""
+    Xp = _prep_X(X)
+    y = np.asarray(y)
+    fit_idx, val_idx = _es_split(len(Xp))
+    sw = None if sample_weight is None else np.asarray(sample_weight, dtype=float)
+    if val_idx is None or np.unique(y[val_idx]).size < 2:
+        model.fit(Xp, y, sample_weight=sw)
+        return model
+    model.fit(
+        Xp.iloc[fit_idx], y[fit_idx],
+        sample_weight=None if sw is None else sw[fit_idx],
+        eval_set=[(Xp.iloc[val_idx], y[val_idx])],
+        eval_sample_weight=None if sw is None else [sw[val_idx]],
+        eval_metric=eval_metric,
+        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False),
+                   lgb.log_evaluation(0)],
+    )
+    return model
 
 
 class _ConstantProba:
@@ -80,8 +124,7 @@ def _fit_binary(X, y, sample_weight=None, params=None):
     if classes.size < 2:
         return _ConstantProba(float(y.mean()) if y.size else 0.0)
     m = _lgbm(params, objective="binary")
-    m.fit(_prep_X(X), y, sample_weight=sample_weight)
-    return m
+    return _fit_es(m, X, y, sample_weight, eval_metric="binary_logloss")
 
 
 def _p1(model, X) -> np.ndarray:
@@ -141,7 +184,7 @@ class SetupSoftmax(_BaseSetup):
             sample_weight = compose_sample_weight(y, self.horizon, self.halflife)
         ymap = y + 1  # {-1,0,1} -> {0,1,2}
         self.model_ = _lgbm(self.params, objective="multiclass", num_class=3)
-        self.model_.fit(_prep_X(X), ymap, sample_weight=sample_weight)
+        _fit_es(self.model_, X, ymap, sample_weight, eval_metric="multi_logloss")
         self.classes_map_ = list(self.model_.classes_)  # ожидаем [0,1,2]
         return self
 

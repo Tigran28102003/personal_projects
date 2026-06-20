@@ -60,23 +60,60 @@ def _detect_gpu() -> Optional[str]:
 
 
 def detect() -> dict:
-    """Compute profile. Small-data default: ``lgbm_threads=1, parallel_fits=n_physical``
-    (clamped so ``parallel_fits × lgbm_threads ≤ n_physical``). Env overrides honoured."""
+    """Compute profile, auto-detected with SAFE defaults (no terminal env needed):
+
+    * ``reserve`` ядра оставляются свободными под ОС/удалённую сессию (headroom);
+    * ``priority='below_normal'`` — процессы понижают приоритет, чтобы интерактив
+      (RDP/SSH) оставался отзывчивым даже при 100% CPU (см. ``apply_priority``);
+    * ``parallel_fits = (n_physical - reserve) // lgbm_threads`` (инвариант
+      ``parallel_fits × lgbm_threads ≤ n_physical``).
+    Любой параметр перекрывается env (``COMPUTE_RESERVE``/``COMPUTE_PRIORITY``/
+    ``PARALLEL_FITS``/``LGBM_THREADS``/``COMPUTE_MODE``)."""
     n_physical, n_logical = _cpu_counts()
     gpu = _detect_gpu()
     mode = os.environ.get("COMPUTE_MODE", "DETERMINISTIC").upper()
+    priority = os.environ.get("COMPUTE_PRIORITY", "below_normal").lower()
     lgbm_threads = int(os.environ.get("LGBM_THREADS", "1"))
-    default_pf = max(1, n_physical // max(1, lgbm_threads))
+    reserve = int(os.environ.get("COMPUTE_RESERVE", "2"))     # ядра под ОС/сессию
+    usable = max(1, n_physical - max(0, reserve))
+    default_pf = max(1, usable // max(1, lgbm_threads))
     parallel_fits = int(os.environ.get("PARALLEL_FITS", str(default_pf)))
-    # enforce the budget invariant
-    if parallel_fits * lgbm_threads > n_physical:
-        parallel_fits = max(1, n_physical // max(1, lgbm_threads))
+    if parallel_fits * lgbm_threads > n_physical:            # safety clamp
+        parallel_fits = max(1, usable // max(1, lgbm_threads))
     return {
         "n_physical": n_physical, "n_logical": n_logical, "gpu": gpu,
         "parallel_fits": parallel_fits, "lgbm_threads": lgbm_threads,
-        "mode": mode if mode in ("DETERMINISTIC", "FAST") else "DETERMINISTIC",
+        "reserve": reserve, "mode": mode if mode in ("DETERMINISTIC", "FAST") else "DETERMINISTIC",
+        "priority": priority if priority in ("below_normal", "low", "normal") else "below_normal",
         "nn_device": os.environ.get("NN_DEVICE", ""),   # "" => auto (cuda>mps>cpu)
     }
+
+
+def set_low_priority(level: str = "below_normal") -> None:
+    """Понизить приоритет ТЕКУЩЕГО процесса. На Windows below_normal/idle классы, на
+    POSIX — nice. Делает сервер отзывчивым к интерактиву даже под полной загрузкой CPU."""
+    try:
+        import psutil
+        p = psutil.Process()
+        if os.name == "nt":
+            cls = {"below_normal": psutil.BELOW_NORMAL_PRIORITY_CLASS,
+                   "low": psutil.IDLE_PRIORITY_CLASS,
+                   "normal": psutil.NORMAL_PRIORITY_CLASS}.get(level, psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            p.nice(cls)
+        else:
+            p.nice({"below_normal": 5, "low": 10, "normal": 0}.get(level, 5))
+    except Exception:  # noqa: BLE001 — приоритет необязателен
+        pass
+
+
+def apply_priority() -> None:
+    """Понизить приоритет текущего процесса до ``COMPUTE_CFG['priority']`` (по умолчанию
+    below_normal). Вызывать один раз в начале прогона (ноутбук/скрипт)."""
+    try:
+        from . import config
+        set_low_priority(config.COMPUTE_CFG.get("priority", "below_normal"))
+    except Exception:  # noqa: BLE001
+        set_low_priority("below_normal")
 
 
 def set_worker_threads(n: int) -> None:
@@ -86,6 +123,7 @@ def set_worker_threads(n: int) -> None:
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ[var] = n
+    set_low_priority(os.environ.get("COMPUTE_PRIORITY", "below_normal"))   # воркеры тоже below-normal
 
 
 def log_utilization(tag: str = "") -> dict:

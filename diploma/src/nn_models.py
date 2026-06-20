@@ -29,6 +29,16 @@ CLASSES = (-1, 0, 1)
 SEQ_CHANNELS = ("ret", "log_volume", "rsi", "macd_hist", "atr_close", "vol24")
 
 
+def _purge_gap() -> int:
+    """HORIZON-зазор между обучающей частью и inner-val хвостом (purge), чтобы
+    перекрывающиеся 24h-метки не утекали в early stopping — как у деревьев (_es_split)."""
+    try:
+        from . import config
+    except ImportError:  # standalone subprocess
+        import config
+    return int(getattr(config, "HORIZON", 24))
+
+
 # ─────────────────────────────── device / loss ─────────────────────────────
 def pick_device(force_cpu: bool = False):
     """cuda > mps > cpu, with ``NN_DEVICE`` env override. Local macOS smoke forces CPU
@@ -158,14 +168,17 @@ def _train_loop(model, Xtr, ytr, wtr, Xval, yval, device, *, epochs, lr, weight_
     Xval_t = torch.tensor(Xval, dtype=torch.float32).to(device)
     use_amp = fast and device.type == "cuda"
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    yval_t = torch.tensor(yval, dtype=torch.long).to(device)
     g = torch.Generator().manual_seed(seed)
-    best_mcc, best_state, bad = -2.0, None, 0
+    best_loss, best_mcc, best_state, bad = float("inf"), 0.0, None, 0
     n = len(Xtr_t)
     for ep in range(epochs):
         model.train()
         perm = torch.randperm(n, generator=g)
         for i in range(0, n, batch):
             idx = perm[i:i + batch]
+            if idx.numel() < 2:          # BatchNorm в train-режиме требует >1 примера
+                continue
             xb = Xtr_t[idx].to(device); yb = ytr_t[idx].to(device); wb = wtr_t[idx].to(device)
             opt.zero_grad()
             with torch.cuda.amp.autocast(enabled=use_amp):
@@ -175,10 +188,15 @@ def _train_loop(model, Xtr, ytr, wtr, Xval, yval, device, *, epochs, lr, weight_
         sched.step()
         model.eval()
         with torch.no_grad():
-            vp = model(Xval_t).argmax(1).cpu().numpy()
+            vlogits = model(Xval_t)
+            vloss = float(_focal_ce(vlogits, yval_t, cls_w).mean())   # сглаженный сигнал ES
+            vp = vlogits.argmax(1).cpu().numpy()
         mcc = matthews_corrcoef(yval, vp) if len(np.unique(yval)) > 1 else 0.0
-        if mcc > best_mcc:
-            best_mcc, best_state, bad = mcc, {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}, 0
+        # ранняя остановка по val-LOSS, а не по MCC: при 70-86% класса 0 argmax-MCC на
+        # хвосте почти всегда ~0 и шумит -> ES по нему фактически случаен и переобучает.
+        if vloss < best_loss - 1e-4:
+            best_loss, best_mcc, bad = vloss, mcc, 0
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         else:
             bad += 1
             if bad >= patience:
@@ -204,31 +222,34 @@ class NNMlp(_NNBase):
     """Табличный MLP на тех же фичах X (apples-to-apples с LightGBM)."""
     name = "MLP"
 
-    def __init__(self, hidden=(96, 48), dropout=0.4, lr=1e-3, weight_decay=1e-4,
+    def __init__(self, hidden=(64, 32), dropout=0.4, lr=1e-3, weight_decay=1e-3,
                  epochs=60, batch=512, force_cpu=True, fast=False, seed=42, val_frac=0.15):
         self.__dict__.update(locals()); del self.self
-
-    def _prep_fit(self, X):
-        from sklearn.impute import SimpleImputer
-        from sklearn.preprocessing import StandardScaler
-        self.imp_ = SimpleImputer(strategy="median").fit(X)
-        self.sc_ = StandardScaler().fit(self.imp_.transform(X))
-        return self.sc_.transform(self.imp_.transform(X)).astype(np.float32)
 
     def _prep(self, X):
         return self.sc_.transform(self.imp_.transform(X)).astype(np.float32)
 
     def fit(self, X, y3, sample_weight=None, y_ret=None):
+        from sklearn.impute import SimpleImputer
+        from sklearn.preprocessing import StandardScaler
         set_determinism(self.seed, self.fast)
         dev = pick_device(self.force_cpu)
         X = pd.DataFrame(X); y = np.asarray(y3).astype(int) + 1
         w = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight, float)
-        Xs = self._prep_fit(X)
-        nval = max(32, int(self.val_frac * len(Xs)))
-        tr = slice(0, len(Xs) - nval); va = slice(len(Xs) - nval, len(Xs))   # chronological inner-val
+        n = len(X)
+        nval = max(32, int(self.val_frac * n))
+        gap = _purge_gap()
+        if n - nval - gap < 100:                       # слишком мало -> убираем зазор
+            gap = 0
+        tr_rows = np.arange(0, n - nval - gap)
+        va_rows = np.arange(n - nval, n)               # хронологический inner-val (purged)
+        # препроцессинг учим ТОЛЬКО на обучающих строках (без утечки в early stopping)
+        self.imp_ = SimpleImputer(strategy="median").fit(X.iloc[tr_rows])
+        self.sc_ = StandardScaler().fit(self.imp_.transform(X.iloc[tr_rows]))
+        Xs = self._prep(X)
         self.model_ = _mlp(Xs.shape[1], self.hidden, self.dropout)
         self.model_, self.val_mcc_ = _train_loop(
-            self.model_, Xs[tr], y[tr], w[tr], Xs[va], y[va], dev,
+            self.model_, Xs[tr_rows], y[tr_rows], w[tr_rows], Xs[va_rows], y[va_rows], dev,
             epochs=self.epochs, lr=self.lr, weight_decay=self.weight_decay,
             batch=self.batch, fast=self.fast, seed=self.seed)
         self.device_ = dev
@@ -245,8 +266,8 @@ class NNMlp(_NNBase):
 class NNSeq(_NNBase):
     """Sequence GRU/LSTM/TCN на causal-окнах сырых каналов. Первые L-1 строк фолда без
     полного окна -> для них P = классовый prior (uniform-ish)."""
-    def __init__(self, kind="tcn", lookback=48, hidden=48, dropout=0.3, lr=1e-3,
-                 weight_decay=1e-4, epochs=50, batch=256, channels=SEQ_CHANNELS,
+    def __init__(self, kind="tcn", lookback=48, hidden=32, dropout=0.3, lr=1e-3,
+                 weight_decay=1e-3, epochs=50, batch=256, channels=SEQ_CHANNELS,
                  force_cpu=True, fast=False, seed=42, val_frac=0.15):
         self.__dict__.update(locals()); del self.self
         self.name = {"tcn": "TCN", "gru": "GRU", "lstm": "LSTM"}[kind]
@@ -263,13 +284,16 @@ class NNSeq(_NNBase):
         X = pd.DataFrame(X); y = np.asarray(y3).astype(int) + 1
         w = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight, float)
         seq, valid, self.chans_ = make_sequences(X, self.lookback, self.channels)
-        # standardise per-channel on the (valid) training rows
-        flat = seq[valid].reshape(-1, seq.shape[2])
-        self.sc_ = StandardScaler().fit(flat)
-        seq = self.sc_.transform(seq.reshape(-1, seq.shape[2])).reshape(seq.shape).astype(np.float32)
         vi = np.where(valid)[0]
         nval = max(32, int(self.val_frac * len(vi)))
-        tr_i, va_i = vi[:-nval], vi[-nval:]
+        gap = _purge_gap()
+        tr_end = len(vi) - nval - gap
+        if tr_end < 50:                                 # слишком мало -> убираем зазор
+            gap, tr_end = 0, len(vi) - nval
+        tr_i, va_i = vi[:tr_end], vi[-nval:]            # purged inner-val хвост
+        # стандартизация по-канально учится ТОЛЬКО на обучающих окнах (без утечки в ES)
+        self.sc_ = StandardScaler().fit(seq[tr_i].reshape(-1, seq.shape[2]))
+        seq = self.sc_.transform(seq.reshape(-1, seq.shape[2])).reshape(seq.shape).astype(np.float32)
         self.prior_ = np.bincount(y, minlength=3) / len(y)
         self.model_ = self._build(seq.shape[2])
         self.model_, self.val_mcc_ = _train_loop(

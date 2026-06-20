@@ -79,7 +79,7 @@ QUICK_MODE = False
 _QUICK = dict(n_trials=10, history_months=18, wf_splits=3, cpcv_N=6, cpcv_k=2,
               n_estimators_cap=200)
 _FULL = dict(n_trials=75, history_months=None, wf_splits=8, cpcv_N=10, cpcv_k=2,
-             n_estimators_cap=2000)
+             n_estimators_cap=600)   # потолок; реальное число деревьев решает early stopping
 
 
 def settings() -> dict:
