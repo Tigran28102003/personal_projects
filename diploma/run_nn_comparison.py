@@ -1,13 +1,13 @@
 """NN learner-comparison for formulation A — runs in a SEPARATE process (torch isolated
-from LightGBM). Builds the SAME pointwise dev walk-forward folds as notebook §10 (V5:
-emits a split fingerprint the notebook asserts against), trains MLP/GRU/TCN on those
-folds, runs the NN leakage auto-tests, and writes ``reports/nn_comparison.json`` +
-figures to ``pictures/<tag>/``.
+from LightGBM). Builds the SAME dev walk-forward folds as notebook §10 (V5: emits a split
+fingerprint the notebook asserts against) for the SAME target as the notebook (default
+triple_barrier — the balanced primary), trains MLP/GRU/TCN on those folds, runs the NN
+leakage auto-tests, and writes ``reports/nn_comparison.json`` + figures to ``pictures/<tag>/``.
 
 Imports only LightGBM-free modules (config/data_io/features/labeling/validation/metrics/
 plotting/nn_models) — never ``optimize``/``models`` (which pull LightGBM).
 
-Usage:  .venv/bin/python run_nn_comparison.py [--cpu] [--quick] [--tag pointwise]
+Usage:  .venv/bin/python run_nn_comparison.py [--cpu] [--quick] [--tag T] [--target triple_barrier] [--vol-k 1.5]
 """
 
 from __future__ import annotations
@@ -64,7 +64,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cpu", action="store_true", help="force CPU (local macOS; V6)")
     ap.add_argument("--quick", action="store_true", help="few epochs / short")
-    ap.add_argument("--tag", default="pointwise")
+    ap.add_argument("--tag", default="triple_barrier")
+    ap.add_argument("--target", default=os.environ.get("NB_TARGET", "triple_barrier"),
+                    help="label type: triple_barrier | pointwise | vol_scaled")
+    ap.add_argument("--vol-k", type=float, default=float(os.environ.get("NB_VOL_K", "1.5")),
+                    help="k for vol_scaled (ignored otherwise)")
     args = ap.parse_args()
     if os.environ.get("NB_QUICK") == "1":
         args.quick = True
@@ -78,11 +82,13 @@ def main() -> int:
         device = "cpu" if use_cpu else "cuda"
     except Exception:  # noqa: BLE001
         use_cpu, device = True, "cpu"
-    print(f"NN comparison: device={device} quick={args.quick} tag={args.tag}")
+    print(f"NN comparison: device={device} quick={args.quick} tag={args.tag} target={args.target}")
     config.RUN_SUBDIR = args.tag
 
-    # dataset + SAME dev WF folds as §10 (V5)
-    X, y3, fwd, ohlc, _ = data_io.build_dataset(target_type="pointwise", threshold=config.THRESHOLD)
+    # dataset + SAME dev WF folds as §10 (V5) — ТОТ ЖЕ таргет, что и в ноутбуке
+    X, y3, fwd, ohlc, _ = data_io.build_dataset(
+        target_type=args.target, k=(args.vol_k if args.target == "vol_scaled" else None),
+        threshold=config.THRESHOLD)
     n = len(X); test_start = int((config.SPLIT[0] + config.SPLIT[1]) * n)
     X_dev, y_dev, fwd_dev = X.iloc[:test_start], y3.iloc[:test_start].to_numpy(), fwd.iloc[:test_start].to_numpy()
     splits = validation.purged_walk_forward_splits(
