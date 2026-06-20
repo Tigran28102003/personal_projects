@@ -36,14 +36,6 @@ fredapi==0.5.2
 psutil==7.2.2          # CPU core detection + utilisation logging
 joblib==1.5.3          # loky process pool for parallel Optuna
 
-# ── neural nets (W8; learner-comparison, GPU P100) ───────────────────────────
-# torch — GPU path runs on the P100 box (CC 6.0 / sm_60). VERIFY the pinned build
-# ships Pascal sm_60 kernels before the FULL run (V3):
-#   python -c "import torch; print(torch.zeros(1,device='cuda'))"
-# If a newer wheel dropped sm_60, pin an older CC-6.0 build (e.g. torch 2.1.x cu118)
-# or document the fallback. Locally torch runs CPU/MPS (validated on CPU, V6).
-torch==2.12.0
-
 # ── visualisation ───────────────────────────────────────────────────────────
 matplotlib==3.10.1
 

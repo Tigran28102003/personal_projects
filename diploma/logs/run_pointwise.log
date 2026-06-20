@@ -15,3 +15,9 @@
 10:22:54 INFO src.data_io | dataset[pointwise]: 12384 rows, 56 features, classes={-1: 1903, 0: 8718, 1: 1763}
 10:22:54 INFO src.data_io | dataset[vol_scaled, k=1.5]: 12365 rows, 56 features, classes={-1: 891, 0: 10604, 1: 870}
 10:22:54 INFO src.data_io | dataset[triple_barrier]: 12384 rows, 56 features, classes={-1: 3721, 0: 5283, 1: 3380}
+13:42:10 INFO src.data_io | features cache hit: C:\Users\user\personal_projects\diploma\data\processed\features_hourly.parquet
+13:42:10 INFO src.data_io | dataset[pointwise]: 76292 rows, 56 features, classes={-1: 14293, 0: 45616, 1: 16383}
+13:42:26 INFO src.data_io | dataset[pointwise]: 76292 rows, 56 features, classes={-1: 14293, 0: 45616, 1: 16383}
+13:42:26 INFO src.data_io | dataset[vol_scaled, k=1.5]: 76273 rows, 56 features, classes={-1: 5345, 0: 64610, 1: 6318}
+13:42:27 INFO src.data_io | dataset[triple_barrier]: 76292 rows, 56 features, classes={-1: 27269, 0: 21836, 1: 27187}
+14:07:46 INFO src.data_io | dataset[pointwise]: 76292 rows, 112 features, classes={-1: 14293, 0: 45616, 1: 16383}
