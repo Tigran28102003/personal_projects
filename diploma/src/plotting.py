@@ -34,6 +34,28 @@ def save_fig(fig, name: str, subdir: Optional[str] = None, dpi: int = 120) -> Pa
     return path
 
 
+def _exp_tag() -> str:
+    """Тег текущего эксперимента (тип таргета) из ``config.RUN_SUBDIR`` — для подписи."""
+    return getattr(config, "RUN_SUBDIR", None) or ""
+
+
+def _set_ident_title(ax, base: str, ident: Optional[str] = None, n: Optional[int] = None):
+    """Заголовок + строка идентификации «постановка · эксперимент · N», чтобы график
+    был САМОДОСТАТОЧНЫМ без имени файла (разные A/B/C и таргеты не сливаются)."""
+    bits = []
+    if ident:
+        bits.append(str(ident))
+    tag = _exp_tag()
+    if tag:
+        bits.append(f"эксп: {tag}")
+    if n is not None:
+        bits.append(f"N={int(n):,}".replace(",", " "))
+    if bits:
+        ax.set_title(f"{base}\n" + "  ·  ".join(bits), fontsize=10)
+    else:
+        ax.set_title(base)
+
+
 # ───────────────────────────────── EDA ─────────────────────────────────────
 def plot_missing_bars(index: pd.Index, freq: str = "1h", name: str = "eda_missing_bars"):
     idx = pd.DatetimeIndex(index)
@@ -93,7 +115,7 @@ def plot_vol_regime(r: pd.Series, window: int = 24 * 7, name: str = "eda_vol_reg
 
 
 # ─────────────────────────────── diagnostics ───────────────────────────────
-def plot_confusion(cm_norm: np.ndarray, labels=(-1, 0, 1), name: str = "confusion"):
+def plot_confusion(cm_norm: np.ndarray, labels=(-1, 0, 1), name: str = "confusion", ident=None):
     fig, ax = plt.subplots(figsize=(4.5, 4))
     im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
     ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels)
@@ -102,7 +124,8 @@ def plot_confusion(cm_norm: np.ndarray, labels=(-1, 0, 1), name: str = "confusio
         for j in range(len(labels)):
             ax.text(j, i, f"{cm_norm[i, j]:.2f}", ha="center", va="center",
                     color="white" if cm_norm[i, j] > 0.5 else "black")
-    ax.set_xlabel("pred"); ax.set_ylabel("true"); ax.set_title("Confusion (row-normalized)")
+    ax.set_xlabel("pred"); ax.set_ylabel("true")
+    _set_ident_title(ax, "Confusion (row-normalized)", ident)
     fig.colorbar(im, ax=ax)
     return save_fig(fig, name)
 
@@ -171,7 +194,7 @@ def _ovr(y_true, c):
     return (np.asarray(y_true).astype(int) == c).astype(int)
 
 
-def plot_roc_ovr(y_true, y_proba, name="roc_ovr", title="ROC (OvR)"):
+def plot_roc_ovr(y_true, y_proba, name="roc_ovr", title="ROC (OvR)", ident=None):
     """ROC-кривые one-vs-rest по классам + macro-AUC."""
     from sklearn.metrics import roc_curve, roc_auc_score
     proba = np.asarray(y_proba, float)
@@ -184,11 +207,12 @@ def plot_roc_ovr(y_true, y_proba, name="roc_ovr", title="ROC (OvR)"):
         ax.plot(fpr, tpr, label=f"{_CLS_LBL[c]} AUC={a:.2f}")
     ax.plot([0, 1], [0, 1], "k--", lw=0.8)
     ax.set_xlabel("FPR"); ax.set_ylabel("TPR")
-    ax.set_title(f"{title}" + (f"  macroAUC={np.mean(aucs):.2f}" if aucs else "")); ax.legend(fontsize=8)
+    base = f"{title}" + (f"  macroAUC={np.mean(aucs):.2f}" if aucs else "")
+    _set_ident_title(ax, base, ident, n=len(y_true)); ax.legend(fontsize=8)
     return save_fig(fig, name)
 
 
-def plot_pr_curves(y_true, y_proba, name="pr_curves", title="Precision-Recall (OvR)"):
+def plot_pr_curves(y_true, y_proba, name="pr_curves", title="Precision-Recall (OvR)", ident=None):
     """PR-кривые по классам + average-precision (важнее ROC для редких ±1)."""
     from sklearn.metrics import precision_recall_curve, average_precision_score
     proba = np.asarray(y_proba, float)
@@ -200,11 +224,12 @@ def plot_pr_curves(y_true, y_proba, name="pr_curves", title="Precision-Recall (O
         pr, rc, _ = precision_recall_curve(yb, proba[:, i]); ap = average_precision_score(yb, proba[:, i])
         ax.plot(rc, pr, label=f"{_CLS_LBL[c]} AP={ap:.2f}")
         ax.axhline(yb.mean(), color="gray", ls=":", lw=0.6)
-    ax.set_xlabel("recall"); ax.set_ylabel("precision"); ax.set_title(title); ax.legend(fontsize=8)
+    ax.set_xlabel("recall"); ax.set_ylabel("precision")
+    _set_ident_title(ax, title, ident, n=len(y_true)); ax.legend(fontsize=8)
     return save_fig(fig, name)
 
 
-def plot_score_separation(y_true, signal_score, name="score_separation"):
+def plot_score_separation(y_true, signal_score, name="score_separation", ident=None):
     """Гистограмма signal_score=P(+1)−P(-1), разбитая по ИСТИННОМУ классу — видно
     разводит ли модель классы."""
     y = np.asarray(y_true).astype(int); s = np.asarray(signal_score, float)
@@ -214,28 +239,30 @@ def plot_score_separation(y_true, signal_score, name="score_separation"):
         if m.sum():
             ax.hist(s[m], bins=40, alpha=0.5, density=True, label=_CLS_LBL[c])
     ax.set_xlabel("signal_score = P(+1) − P(−1)"); ax.set_ylabel("density")
-    ax.set_title("Разделимость score по истинному классу"); ax.legend(fontsize=8)
+    _set_ident_title(ax, "Разделимость score по истин. классу", ident, n=len(y)); ax.legend(fontsize=8)
     return save_fig(fig, name)
 
 
-def plot_calibration_per_class(y_true, y_proba, name="calibration_per_class", n_bins=10):
+def plot_calibration_per_class(y_true, y_proba, name="calibration_per_class", n_bins=10, ident=None):
     """Per-class reliability (OvR) + Brier в подписи."""
     from sklearn.calibration import calibration_curve
     from sklearn.metrics import brier_score_loss
     proba = np.asarray(y_proba, float)
     fig, ax = plt.subplots(figsize=(5, 4.5)); ax.plot([0, 1], [0, 1], "k--", lw=0.8)
+    briers = []
     for i, c in enumerate(_CLS):
         yb = _ovr(y_true, c)
         if yb.sum() == 0:
             continue
         try:
             ft, mp = calibration_curve(yb, proba[:, i], n_bins=n_bins, strategy="quantile")
-            b = brier_score_loss(yb, proba[:, i])
+            b = brier_score_loss(yb, proba[:, i]); briers.append(b)
             ax.plot(mp, ft, "o-", ms=3, label=f"{_CLS_LBL[c]} Brier={b:.3f}")
         except Exception:  # noqa: BLE001
             pass
     ax.set_xlabel("pred prob"); ax.set_ylabel("observed freq")
-    ax.set_title("Калибровка per-class"); ax.legend(fontsize=8)
+    base = "Калибровка per-class" + (f"  (Brier̄={np.mean(briers):.3f})" if briers else "")
+    _set_ident_title(ax, base, ident, n=len(y_true)); ax.legend(fontsize=8)
     return save_fig(fig, name)
 
 
